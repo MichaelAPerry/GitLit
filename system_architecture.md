@@ -1377,14 +1377,15 @@ in it without noticing the version control at all.
 2. **Free to use.** No author paywall. Publisher verification becomes the revenue line
    once there is enough adoption for publishers to care. Affordable because of decision
    7 — see §16.1.
-3. **The AI never writes prose.** Hard platform constraint: the AI Researcher emits
-   plans, ledgers, and outlines only, and never writes into `manuscript/`. Enforced in
-   the commit path, not by policy. Repos containing AI-generated prose are **labeled,
-   not deleted** — see §16.2.
+3. **The AI never writes prose.** Hard platform constraint: MCP write tools emit plans,
+   ledgers, and outlines only, and cannot touch `manuscript/`. Enforced in the commit
+   path, not by policy. Repos containing AI-generated prose are **labeled and, on
+   confirmed violation, delisted — never force-published, never deleted** (§16.2).
 4. **Imports are labeled `imported`,** permanently and visibly. No attestation flow; an
    author signing a declaration that text is theirs adds a claim we cannot check, and
    the honest label is more valuable than a decorative one.
-5. **Public gallery is opt-in,** per-repo, default off, and revocable.
+5. **Public gallery is opt-in,** per-repo, default off, revocable, and gated on the
+   provenance standard in §16.3.
 
 Plus one new decision from the same round:
 
@@ -1420,35 +1421,114 @@ the correct place for it — they are getting the value directly and they alread
 Remaining guard: research tools behind email verification + 24h account age, or GitLit
 becomes a free book-search API within a week of launch.
 
-### 16.2 One thing I want to push back on — removal
+### 16.2 Enforcement — the ladder, and the two rungs we will not build
 
-The decision recorded above is "labeled, not deleted," which is not quite what was asked
-for. The reasoning, briefly:
+**Decided: label and delist. Never force public, never delete.**
 
-- We cannot reliably detect AI prose (§7.5.2). An enforcement regime built on unreliable
-  detection punishes the honest — the authors we would catch are the ones who *self
-  -declared*, while the retypers sail through. That is a perverse incentive aimed
-  squarely at our best users.
-- Deleting an author's manuscript is the most destructive act available to us. If we are
-  ever wrong once, in public, the platform is finished.
-- Strategically it is the wrong business. "We remove AI books" makes us an AI-detection
-  company, competing with tools that demonstrably do not work. "We record what happened"
-  makes us a provenance company. Only the second is defensible.
+#### 16.2.1 The label is the enforcement
 
-The enforcement that *does* work, and is recommended instead:
+Before designing any punishment, note that the consequence already exists and is
+permanent. An `ai_generated` prose span is written into the commit trailers, the sidecar,
+and the signed receipt (§7). It is *inside the repository*. Every clone carries it. A
+publisher running `gitlit verify` sees it in five years with no GitLit account and no
+network, whether or not this company still exists.
 
-- The **public gallery (§16.5) has a bar.** Listing requires a provenance standard:
-  no AI-generated prose spans, no unexplained bulk pastes, a continuous session record.
-  That is a real, enforceable gate on the thing authors actually want — visibility.
-- **Publisher verification (§12.6) surfaces the full record**, so a publisher can decline
-  the book. Let the market enforce it; that is what the record is for.
-- Deletion stays reserved for what it is normally reserved for — abuse, plagiarism
-  reports, illegal content — with an appeal path.
+That is a portable, irrevocable consequence that costs us no punitive action, no legal
+exposure, and no false-positive risk beyond the labeling itself. **The record enforces
+itself.** Everything below is secondary, and each added rung buys less than the last
+while costing more.
 
-Say the word if you still want removal and I will design the enforcement path; I would
-want us to agree on the false-positive cost first.
+#### 16.2.2 The ladder
 
-### 16.3 Still open
+Every rung is reversible, proportionate, appealable, and leaves the author in full
+possession of their work.
+
+| Rung | Action | Trigger | Reversible |
+|---|---|---|---|
+| 1 | **Label.** Provenance record shows the spans. Always on. | Observed fact | n/a — it is a record |
+| 2 | **Gallery ineligible.** Fails the §16.3 standard, so not listed. | Automatic from the record | Yes, if the record changes |
+| 3 | **Delist.** Removed from search, discovery, profile listings. Public repo drops to unlisted: existing links work, nothing new finds it. | Confirmed violation | Yes |
+| 4 | **Sharing restricted.** No new verification links; existing ones show the flag prominently. | Repeat or deceptive violation | Yes |
+| 5 | **Suspend.** Owner retains full read/export. | Abuse, plagiarism report, illegal content — *not* AI use | Yes, on appeal |
+
+Rung 3 is what "hidden" means, and the definition matters: **hidden from discovery, never
+from the author.** They keep read, write, export, clone, and collaborator access
+throughout. We reduce our amplification of the work; we never take the work.
+
+#### 16.2.3 Not building: forced publication
+
+Proposed and rejected. It is the most destructive option available to us — more
+destructive than deletion — and it is the one that could end the company.
+
+- **It destroys the book, not our copy of it.** Most publishing contracts turn on first
+  serial rights; a freely readable manuscript is, to much of the industry, already
+  published and no longer acquirable. Deletion leaves the author their file and their
+  market. Forced publication leaves them neither.
+- **It is irreversible.** Scraped, archived, and mirrored within hours. There is no
+  un-publish. Every other rung on the ladder can be walked back; this one cannot.
+- **It is us infringing their copyright.** The author owns it. A punitive-publication
+  clause would not survive a court, and on publishing we become the publisher of whatever
+  defamation, private facts about real people, or third-party material the manuscript
+  contains.
+- **The trigger would be a signal we know is unreliable** (§7.5.2). Nuclear consequence,
+  probabilistic input, maximally sympathetic plaintiff.
+- **It inverts the product.** Our pitch to a privacy-anxious user base is that unpublished
+  work is safe here. "Use AI and we publish your book against your will" deters the
+  careful authors we want while bad actors use another tool. It also makes account
+  compromise catastrophic: anyone who can trigger the signal on someone else's repo can
+  publish their novel.
+
+#### 16.2.4 Not building: deletion for AI use
+
+As previously argued: unreliable detection means we would catch the self-declarers and
+miss the retypers, punishing our most honest users. Deletion stays scoped to rung 5's
+triggers — abuse, plagiarism, illegal content — with an appeal path.
+
+#### 16.2.5 What may trigger rungs 3–5
+
+Only things we **observed**, never a statistical guess that prose "reads like AI" — that
+is precisely the broken-detector business we are not in (§3).
+
+- An MCP tool call that attempted to write into `manuscript/` and was rejected (§8.3).
+  Logged as a fact, with the attempt visible.
+- A bulk paste whose content hash matches output from an agent session (§7.5.5).
+- The author's own declaration. **This triggers labeling only, never rungs 3–5** —
+  penalizing honesty would be self-defeating, and an author who marks their own AI use is
+  doing exactly what the platform is for.
+- A third-party report, plus human review. Never automated to rungs 3+.
+
+Rungs 3 and above require human review and produce a written reason and an appeal. No
+automated path reaches them.
+
+### 16.3 The gallery standard
+
+Referenced by rung 2 above, and the enforcement mechanism I would rely on most, because
+it gates the one thing authors actively want from us — visibility — without touching
+anything they own. Listing is opt-in, so setting conditions on it is curation rather than
+punishment, which is a far more defensible posture than any penalty.
+
+A repository qualifies for the public gallery when, at the listed ref:
+
+1. **No `ai_generated` prose spans** anywhere under `manuscript/`. Architecture docs,
+   outlines, and research ledgers are expected to be machine-authored — that is the
+   product — and do not count against this.
+2. **No unexplained bulk pastes.** Pastes above the §7.5.5 threshold either carry an
+   author annotation or are individually below the flag size. Annotated pastes pass;
+   we are asking for an account, not an absence.
+3. **A continuous session record** — the manuscript demonstrably accumulated over time
+   rather than appearing in three sittings.
+4. **A verifying receipt chain** (§7.4) with no gaps.
+5. **`imported` spans disclosed**, not disqualifying. A book begun elsewhere and finished
+   here is an honest and common case; it lists with its import clearly shown.
+
+Criterion 2 is where false positives would concentrate, so it is written to be satisfiable
+by explanation rather than by purity. An author who pastes their own Scrivener draft and
+says so meets the standard.
+
+Eligibility is computed from the record and shown to the author *before* they apply, with
+the specific unmet criterion named. No silent rejections.
+
+### 16.4 Still open
 
 - **`write.gitlit.app` as a marketing surface** — same app, same account, different front
   door, for authors who want the writing tool before they want version control. Cheap to
