@@ -194,6 +194,7 @@ over-interpretation we must avoid.
 | Auth | Auth.js v5 — GitHub OAuth, Google, email magic link; DB sessions | Authors are not all developers; email must work. |
 | Signing | Ed25519 per-repo keys (libsodium); optional Sigstore/gitsign for orgs | Receipts in §7.4. |
 | Object storage | S3-compatible (Cloudflare R2) | Repo bundles, exports, cover art, imported source docs. |
+| Input capture | `beforeinput` / `paste` / `composition` events + aggregated cadence | GitLit Write instrumentation (§7.5). Aggregates only — never a keylog. |
 | Realtime | SSE (research progress, timeline updates) | Simpler than WebSockets; unidirectional is all we need. |
 | Email | Resend + React Email | Invites, run-complete, publisher verification links. |
 | Observability | OpenTelemetry → Grafana Tempo/Loki; Sentry | AI runs are distributed traces; we need per-step spans. |
@@ -434,6 +435,89 @@ reports exactly which commits verify — offline, without trusting our servers.
 Optional for publisher-tier repos: periodic anchoring of the chain head to an external
 timestamp authority (RFC 3161), which converts "we say this existed on the 21st" into
 "a third party attested this existed on the 21st."
+
+### 7.5 Input provenance — GitLit Write
+
+The Git remote and the MCP server cover text that arrives from outside. **GitLit Write**
+covers text that is composed inside — a clean, distraction-free authoring surface (one
+column, no chrome, the book and nothing else) that happens to be instrumented.
+
+It is not a separate site. The entire value of the instrumentation is that it writes into
+the same provenance chain as everything else; split it onto its own domain and it becomes
+a nice text box with no memory. Market it under its own name later if that helps
+acquisition, but it ships as the default writing surface of a GitLit repository.
+
+#### 7.5.1 What the browser actually gives us
+
+| Signal | Source | What it tells us |
+|---|---|---|
+| Paste | `paste` event + `beforeinput` `insertFromPaste` | Size, and the content itself. Catches Ctrl+V, context menu, middle-click. |
+| Drop | `drop` + `insertFromDrop` | Dragged-in text. |
+| Composition | `compositionstart/end` | IME and swipe-keyboard input — a distinct mode, never "paste". |
+| Dictation | `insertReplacementText` + no keydown | Speech-to-text. |
+| Synthetic input | `event.isTrusted === false` | Script-driven insertion. |
+| Keystroke cadence | `keydown` intervals, aggregated | Burst shape, session rhythm, words-per-minute distribution. |
+| Non-keyed growth | text delta with no preceding keydown | Text that appeared without being typed, by any route. |
+
+Only aggregates leave the browser — inter-keystroke interval histograms, burst
+boundaries, counts. **We never transmit or store a keylog.** Storing what an author typed,
+keystroke by keystroke, would be a surveillance product and a breach liability, and it
+buys us nothing the aggregates don't.
+
+#### 7.5.2 What defeats it, stated plainly
+
+- **Retyping.** Read AI output off a second screen, type it in by hand. Undetectable by
+  us or by anyone. What we do is impose a real cost: retyping a 100k-word novel is weeks
+  of labor. That is the honest claim — cost, not prevention.
+- **Browser automation** (Playwright/CDP) produces genuinely trusted events and can model
+  human cadence. Small population, real gap.
+- **The Git remote.** Authors can push from any tool. Server-side spans mark those commits
+  by what we can observe, not by what the client asserts (§12.7).
+
+§3 governs: these are evidence signals, never proof.
+
+#### 7.5.3 Design rule — record, do not accuse
+
+Authors paste constantly and legitimately: from Scrivener, from their own notes, from a
+scene cut three months ago. **Paste is not evidence of AI**, and a UI that implies it is
+will insult its users on first contact.
+
+Equally: dictation, switch access, IME, and swipe keyboards are accessibility and
+language-support needs. Treating "did not type this" as "cheated" would make the product
+discriminatory. Each gets its own input mode and none is flagged.
+
+So every insertion carries a neutral, observed `input_mode`:
+
+```
+typed | pasted | dictated | composed | dropped | imported | ai_tool | synthetic
+```
+
+recorded as fact. The author may annotate a paste with its source ("my Scrivener draft"),
+and that annotation is stored as **an author claim**, rendered distinctly from what the
+system observed. We never collapse the two.
+
+#### 7.5.4 Why this is an asset, not a police function
+
+The pressing problem for honest authors today is not getting away with AI — it is **being
+falsely accused of it** by detectors that do not work. A signed, timestamped record of a
+manuscript accumulating over eight months at human cadence, with every paste accounted
+for, is an affirmative defense that is currently unpurchasable.
+
+That is the product: *proof of work for the accused*, with detection as a side effect.
+It also determines the UI's voice — the provenance panel reads as a record of the
+author's labor, never as a report on their conduct.
+
+#### 7.5.5 Session and event model
+
+A **authoring session** is a contiguous writing period (30-minute idle timeout). It
+stores aggregates. An **input event** is stored only for non-typed insertions above a
+threshold (default 200 characters) — typed text produces no per-event rows at all, only
+session aggregates. Retention: input events expire after 24 months unless the repo has
+an active verification link.
+
+Events feed span evidence (§7.3) and the Prose Timeline's session density overlay (§10).
+SHA-256 of pasted content is stored, not the content — enough to prove the same block was
+pasted twice or matches an AI run's output, without retaining a copy.
 
 ---
 
@@ -726,6 +810,39 @@ CREATE TABLE signing_keys (
   revoked_at TIMESTAMPTZ
 );
 
+CREATE TABLE authoring_sessions (
+  id TEXT PRIMARY KEY,
+  repo_id TEXT NOT NULL REFERENCES repositories ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users ON DELETE CASCADE,
+  started_at TIMESTAMPTZ NOT NULL, ended_at TIMESTAMPTZ,
+  paths TEXT[] NOT NULL DEFAULT '{}',
+  words_added INT NOT NULL DEFAULT 0, words_removed INT NOT NULL DEFAULT 0,
+  keystrokes INT NOT NULL DEFAULT 0,          -- count only, never content
+  iki_histogram INT[] NOT NULL DEFAULT '{}',  -- inter-keystroke interval buckets
+  median_wpm REAL, burst_count INT,
+  mode_words JSONB NOT NULL DEFAULT '{}',     -- {typed: 812, pasted: 140, dictated: 0}
+  client TEXT NOT NULL,                       -- write_web | write_desktop | git | mcp
+  commit_shas CHAR(40)[] NOT NULL DEFAULT '{}'
+);
+CREATE INDEX sessions_repo ON authoring_sessions (repo_id, started_at DESC);
+
+CREATE TABLE input_events (        -- NON-TYPED insertions only, >= threshold chars
+  id BIGSERIAL PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES authoring_sessions ON DELETE CASCADE,
+  repo_id TEXT NOT NULL REFERENCES repositories ON DELETE CASCADE,
+  path TEXT NOT NULL, occurred_at TIMESTAMPTZ NOT NULL,
+  input_mode TEXT NOT NULL,        -- pasted | dictated | composed | dropped
+                                   -- | imported | ai_tool | synthetic
+  char_count INT NOT NULL, word_count INT NOT NULL,
+  content_hash TEXT NOT NULL,      -- sha256 of inserted text; text NOT stored
+  is_trusted BOOLEAN NOT NULL DEFAULT TRUE,
+  matched_run_id TEXT REFERENCES ai_runs,   -- set if hash matches our own AI output
+  author_note TEXT,                -- AUTHOR CLAIM about origin, not an observation
+  author_noted_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX input_events_repo ON input_events (repo_id, occurred_at DESC);
+
 CREATE TABLE timeline_events (
   id BIGSERIAL PRIMARY KEY,
   repo_id TEXT NOT NULL REFERENCES repositories ON DELETE CASCADE,
@@ -966,6 +1083,21 @@ GET    /repositories/:owner/:slug/architecture?ref=  → parsed manuscript_archi
 `/runs/:id/events`. A run halted at `derivative` waits on `novelty/respond` — the author
 is in the loop before any money is spent on the outline step.
 
+### 12.4b GitLit Write sessions
+
+```
+POST   /repositories/:owner/:slug/sessions              { path } → session_id
+PATCH  /sessions/:id                                    { aggregates, events[] }  (batched)
+POST   /sessions/:id/close
+GET    /repositories/:owner/:slug/sessions?from=&to=
+PATCH  /input-events/:id                                { author_note }  ← author claim
+```
+
+The client batches aggregates every 30s and on blur. Input events are rejected server-side
+if they arrive without a valid session, so the record cannot be trivially suppressed by a
+client that simply stops reporting — a commit with no session and no Git-remote origin is
+recorded as `unknown`, not as typed.
+
 ### 12.5 Provenance and diffs
 
 ```
@@ -1093,8 +1225,9 @@ readable without understanding the rest of the system.
 |-------|-------|------|
 | **0** | Monorepo, DB, auth, CI, deploy skeleton | 1 wk |
 | **1** | `gitd` + repo create/read/write + prose normalizer + commit path | 2 wks |
-| **2** | **Dashboard UI** + manuscript editor + chapter CRUD | 2 wks |
+| **2** | **Dashboard UI** + GitLit Write editor + chapter CRUD | 2.5 wks |
 | **3** | Provenance spans, trailers, receipts, `gitlit verify` | 2 wks |
+| **3.5** | Input provenance capture + session model (§7.5) | 1 wk |
 | **4** | AI Researcher pipeline + SSE progress + architecture commit | 3 wks |
 | **5** | Provenance Diff Viewer (Modes A/B/C) + derivation matcher | 3 wks |
 | **6** | Prose Timeline + stats | 1.5 wks |
@@ -1103,25 +1236,83 @@ readable without understanding the rest of the system.
 
 Phase 2 is what gets scaffolded on approval, per your Step 2.
 
----
-
-## 16. Open questions — I need your call on these
-
-1. **Novelty halt.** I have the pipeline *stop* on a `derivative` verdict and ask the
-   author before spending on an outline. More honest, but it is friction in the magic
-   moment. Keep the halt?
-2. **Who is the paying customer?** Author subscription, or publisher seats for
-   verification? This changes whether the publisher-facing verification view is a v1
-   feature or a v2 one. I have it at Phase 7 — meaning we build the trust layer before
-   we know who buys it.
-3. **Does the AI ever write prose?** Current design: it writes *plans only*, never
-   manuscript text. That is a much cleaner story for the provenance product, and it is
-   also a real constraint on the product's usefulness to some authors. Hold the line?
-4. **Import provenance.** Imported manuscripts start as `unknown`. Acceptable, or do we
-   need an "attest this was human-written" flow (author signs a declaration) on import?
-5. **Public by default for finished books?** A public gallery of provenance-verified
-   books would be strong marketing, but it inverts §14's default. Opt-in only, I assume.
+Input capture (3.5) lands right after the span model it feeds, and deliberately *after*
+the editor exists — instrumenting a writing surface that has not proven pleasant to write
+in is optimizing the wrong thing. Phase 2's success test is an author finishing a session
+in it without noticing the version control at all.
 
 ---
 
-*Awaiting approval before scaffolding (Step 2).*
+## 16. Decisions (resolved 2026-09-19)
+
+1. **Novelty halt — toggle, defaulting to on.** `repositories.halt_on_derivative`.
+   The run pauses on a `derivative` verdict and asks; authors who find it patronizing
+   turn it off once. Either way the verdict is recorded in the architecture doc.
+2. **Free to use.** No author paywall. Publisher verification becomes the revenue line
+   once there is enough adoption for publishers to care. This moves cost control from a
+   business concern to an *existential* one — see §16.1.
+3. **The AI never writes prose.** Hard platform constraint: the AI Researcher emits
+   plans, ledgers, and outlines only, and never writes into `manuscript/`. Enforced in
+   the commit path, not by policy. Repos containing AI-generated prose are **labeled,
+   not deleted** — see §16.2.
+4. **Imports are labeled `imported`,** permanently and visibly. No attestation flow; an
+   author signing a declaration that text is theirs adds a claim we cannot check, and
+   the honest label is more valuable than a decorative one.
+5. **Public gallery is opt-in,** per-repo, default off, and revocable.
+
+Plus one new decision from the same round:
+
+6. **GitLit Write ships as the default authoring surface** (§7.5), instrumented for
+   input provenance, recording rather than accusing. Not a separate site.
+
+### 16.1 The consequence of "free" — AI cost is now the binding constraint
+
+A free tier with a $1.80–$4.50 research run is a subsidy with no ceiling. Before launch:
+
+- **One full research run per repository, free.** Re-runs and `deep` depth require a
+  paid credit or an invite code. Most authors start one book, so this is generous in
+  practice and bounded in the aggregate.
+- **Novelty-only runs stay unlimited-ish** (rate limited, ~$0.15 each) — they are the
+  cheap hook and the best demo.
+- **Abuse guard:** the research pipeline behind email verification + a 24h account age,
+  or it becomes a free research API within a week of launch.
+- **Storage:** repos are text; a 150k-word novel with full history is ~15MB. Effectively
+  free. Storage is not the risk. Inference is.
+
+### 16.2 One thing I want to push back on — removal
+
+The decision recorded above is "labeled, not deleted," which is not quite what was asked
+for. The reasoning, briefly:
+
+- We cannot reliably detect AI prose (§7.5.2). An enforcement regime built on unreliable
+  detection punishes the honest — the authors we would catch are the ones who *self
+  -declared*, while the retypers sail through. That is a perverse incentive aimed
+  squarely at our best users.
+- Deleting an author's manuscript is the most destructive act available to us. If we are
+  ever wrong once, in public, the platform is finished.
+- Strategically it is the wrong business. "We remove AI books" makes us an AI-detection
+  company, competing with tools that demonstrably do not work. "We record what happened"
+  makes us a provenance company. Only the second is defensible.
+
+The enforcement that *does* work, and is recommended instead:
+
+- The **public gallery (§16.5) has a bar.** Listing requires a provenance standard:
+  no AI-generated prose spans, no unexplained bulk pastes, a continuous session record.
+  That is a real, enforceable gate on the thing authors actually want — visibility.
+- **Publisher verification (§12.6) surfaces the full record**, so a publisher can decline
+  the book. Let the market enforce it; that is what the record is for.
+- Deletion stays reserved for what it is normally reserved for — abuse, plagiarism
+  reports, illegal content — with an appeal path.
+
+Say the word if you still want removal and I will design the enforcement path; I would
+want us to agree on the false-positive cost first.
+
+### 16.3 Still open
+
+- **`write.gitlit.app` as a marketing surface** — same app, same account, different front
+  door, for authors who want the writing tool before they want version control. Cheap to
+  do later, so not scaffolded now. Worth revisiting after Phase 2.
+
+---
+
+*Approved 2026-09-19. Scaffolding Phases 0–2 on go.*
