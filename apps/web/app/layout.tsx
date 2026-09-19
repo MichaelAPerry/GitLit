@@ -16,6 +16,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <Link href="/" className="brand">Git<span>Lit</span></Link>
             <span className="tagline">version control for manuscripts</span>
             <span className="spacer" />
+            <Link href="/signin" className="btn secondary">Sign in</Link>
             <Link href="/new" className="btn">New book</Link>
           </div>
         </header>

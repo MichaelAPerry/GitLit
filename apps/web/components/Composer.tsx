@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { API } from "@/lib/api";
+import { API, sessionToken } from "@/lib/api";
 import { useInputProvenance } from "@/lib/input-provenance";
 
 /**
@@ -12,6 +12,14 @@ import { useInputProvenance } from "@/lib/input-provenance";
  * deliberately unobtrusive: this has to be pleasant to write in first, or the
  * provenance it captures is worth nothing because nobody uses it.
  */
+const authHeaders = (): Record<string, string> => {
+  const token = sessionToken();
+  return {
+    "content-type": "application/json",
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+  };
+};
+
 export function Composer({
   owner, slug, path, initialContent,
 }: {
@@ -35,7 +43,8 @@ export function Composer({
     try {
       const res = await fetch(`${API}/v1/repositories/${owner}/${slug}/sessions`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: authHeaders(),
+        credentials: "include",
         body: JSON.stringify({ path, client: "write_web" }),
       });
       if (!res.ok) return null;
@@ -55,7 +64,8 @@ export function Composer({
     try {
       await fetch(`${API}/v1/sessions/${id}`, {
         method: "PATCH",
-        headers: { "content-type": "application/json" },
+        headers: authHeaders(),
+        credentials: "include",
         body: JSON.stringify({
           keystrokes: aggregates.keystrokes,
           medianWpm: aggregates.medianWpm,
@@ -82,7 +92,8 @@ export function Composer({
         `${API}/v1/repositories/${owner}/${slug}/documents/${path}`,
         {
           method: "PUT",
-          headers: { "content-type": "application/json" },
+          headers: authHeaders(),
+          credentials: "include",
           body: JSON.stringify({
             content: text,
             message: `Write ${path.split("/").pop()}`,

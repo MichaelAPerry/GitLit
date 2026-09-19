@@ -18,6 +18,7 @@
     "@gitlit/prose": "workspace:*",
     "@gitlit/provenance": "workspace:*",
     "fastify": "^5.2.0",
-    "zod": "^3.24.1"
+    "zod": "^3.24.1",
+    "@gitlit/auth": "workspace:*"
   }
 }

@@ -1,9 +1,14 @@
 const GITD = process.env.GITD_URL ?? "http://localhost:4001";
+const SERVICE_TOKEN = process.env.GITD_SERVICE_TOKEN;
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${GITD}${path}`, {
     ...init,
-    headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
+    headers: {
+      "content-type": "application/json",
+      ...(SERVICE_TOKEN ? { authorization: `Bearer ${SERVICE_TOKEN}` } : {}),
+      ...(init?.headers ?? {}),
+    },
   });
   if (!res.ok) throw new Error(`gitd ${res.status}: ${await res.text()}`);
   return res.json() as Promise<T>;

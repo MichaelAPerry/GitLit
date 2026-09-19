@@ -27,6 +27,9 @@ export default async function Dashboard() {
     return (
       <div className="empty">
         <h2>No books yet</h2>
+        <p className="meta">
+          If you have books already, <Link href="/signin" style={{ textDecoration: "underline" }}>sign in</Link> to see them.
+        </p>
         <p className="meta">A book is a repository. Its history is the record of how it was written.</p>
         <p style={{ marginTop: 24 }}><Link href="/new" className="btn">Start a book</Link></p>
       </div>

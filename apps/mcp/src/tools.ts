@@ -84,7 +84,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
     const repo = await resolveRepo(owner, slug);
     const session = sessionFor(ctx, repo.id);
     return ctx.sessions.record(session, "gitlit_get_premise", { owner, slug }, async () => {
-      const { content } = await gitlit.readBlob(repo.id, ".gitlit/premise.md");
+      const { content } = await gitlit.readBlob(owner, slug, ".gitlit/premise.md");
       return json({
         sessionId: session.id,
         repo: { owner, slug, title: repo.title, form: repo.form, phase: repo.phase },
@@ -150,7 +150,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
     const repo = await resolveRepo(owner, slug);
     const session = sessionFor(ctx, repo.id);
     return ctx.sessions.record(session, "gitlit_similarity_check", { owner, slug }, async () => {
-      const { content: premise } = await gitlit.readBlob(repo.id, ".gitlit/premise.md");
+      const { content: premise } = await gitlit.readBlob(owner, slug, ".gitlit/premise.md");
       if (!premise) throw toolRejected("no_premise", "This book has no premise recorded yet.");
 
       const rows = ledgerFor(ctx, session).all();
@@ -310,7 +310,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       const parsed = validateArchitecture(markdown, ledger);
       ctx.sessions.spend(session, "architectureCommits");
 
-      const { content: premise } = await gitlit.readBlob(repo.id, ".gitlit/premise.md");
+      const { content: premise } = await gitlit.readBlob(owner, slug, ".gitlit/premise.md");
       const frontMatter = buildFrontMatter({
         sessionId: session.id,
         declaredModel: session.declaredModel,
@@ -323,14 +323,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       const body = markdown.replace(/^---\n[\s\S]*?\n---\n*/, "");
       const document = `${frontMatter}\n\n${body.trim()}\n`;
 
-      const result = await gitlit.commit(repo.id, {
-        ref: "refs/heads/main",
+      const result = await gitlit.commitArchitecture(owner, slug, {
         message,
-        author: {
-          name: session.clientName ? `${session.clientName} via MCP` : "Agent via MCP",
-          email: "agent@gitlit.app",
-        },
-        newTextOrigin: "ai_generated",
         agentSessionId: session.id,
         declaredModel: session.declaredModel,
         evidence: [`mcp:${session.transport}`, `tool_calls:${session.toolCalls.length}`],
@@ -376,8 +370,8 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
     const session = sessionFor(ctx, repo.id);
     return ctx.sessions.record(session, "gitlit_read_document", { path }, async () => {
       const [{ content }, sidecar] = await Promise.all([
-        gitlit.readBlob(repo.id, path),
-        gitlit.readBlob(repo.id, `.gitlit/provenance/${path}.jsonl`),
+        gitlit.readBlob(owner, slug, path),
+        gitlit.readBlob(owner, slug, `.gitlit/provenance/${path}.jsonl`),
       ]);
       if (content === null) throw toolRejected("not_found", `No such file: ${path}`);
       const spans = (sidecar.content ?? "").split("\n").filter(Boolean).map((l) => JSON.parse(l));

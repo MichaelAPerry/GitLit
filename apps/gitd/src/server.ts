@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { GitLitError } from "@gitlit/core";
 import { initRepo, readFileAt, repoPath, log, resolveHead, listTree } from "./repo.js";
@@ -20,6 +21,36 @@ export function buildServer() {
   // restart, which is the opposite of what receipts are for.
   const keys = new KeyStore((repoId) => repoPath(REPO_ROOT, repoId));
   const keyFor = (repoId: string) => keys.for(repoId);
+
+  /**
+   * Service authentication.
+   *
+   * gitd holds every repository and the commit path that writes provenance.
+   * If it is reachable without a credential, authorization in the API is
+   * decorative — anyone who can route to this port can commit as anyone. It is
+   * an internal service, so a shared secret is the right shape; it must be set
+   * explicitly rather than defaulted, so a misconfigured deploy fails loudly
+   * instead of silently running open.
+   */
+  const serviceToken = process.env.GITD_SERVICE_TOKEN;
+  if (!serviceToken) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("GITD_SERVICE_TOKEN must be set. Refusing to start without service auth.");
+    }
+    app.log.warn("GITD_SERVICE_TOKEN is unset — running OPEN. Never do this outside development.");
+  }
+
+  app.addHook("onRequest", async (req, reply) => {
+    if (req.url === "/health" || !serviceToken) return;
+    const header = req.headers.authorization;
+    const presented = header?.startsWith("Bearer ") ? header.slice(7).trim() : "";
+    const a = Buffer.from(presented);
+    const b = Buffer.from(serviceToken);
+    const ok = a.length === b.length && timingSafeEqual(a, b);
+    if (!ok) {
+      await reply.status(401).send({ title: "Unauthorized", status: 401, detail: "gitd requires a service token." });
+    }
+  });
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof GitLitError) return reply.status(err.status).send(err.toProblem());

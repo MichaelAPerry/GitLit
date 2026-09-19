@@ -29,6 +29,9 @@ importers:
       '@fastify/cors':
         specifier: ^10.0.1
         version: 10.1.0
+      '@gitlit/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@gitlit/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -127,6 +130,12 @@ importers:
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
+
+  packages/auth:
+    dependencies:
+      '@gitlit/core':
+        specifier: workspace:*
+        version: link:../core
 
   packages/core:
     dependencies:
