@@ -1,11 +1,12 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { z } from "zod";
-import { GitLitError, newRepoId, newAuthoringSessionId, notFound } from "@gitlit/core";
+import { GitLitError, newRepoId, notFound } from "@gitlit/core";
 import { diffProse } from "@gitlit/diff";
 import { countWords, denormalize } from "@gitlit/prose";
 import { gitd } from "./gitd-client.js";
 import { repos, type RepoRecord } from "./store.js";
+import { authoringSessions, evidenceFor } from "./sessions.js";
 
 const app = Fastify({ logger: true });
 await app.register(cors, { origin: true });
@@ -87,11 +88,11 @@ app.get("/v1/repositories/:owner/:slug/documents", async (req) => {
 });
 
 app.get("/v1/repositories/:owner/:slug/documents/*", async (req) => {
-  const { owner, slug, "*": path } = req.params as Record<string, string>;
+  const { owner, slug, "*": path } = req.params as { owner: string; slug: string; "*": string };
   const repo = mustFind(owner, slug);
   const q = z.object({ ref: z.string().default("refs/heads/main"), flow: z.coerce.boolean().default(false) }).parse(req.query);
-  const { content } = await gitd.readBlob(repo.id, path!, q.ref);
-  if (content === null) throw notFound(path!);
+  const { content } = await gitd.readBlob(repo.id, path, q.ref);
+  if (content === null) throw notFound(path);
   return {
     path,
     content: q.flow ? denormalize(content) : content,
@@ -104,7 +105,7 @@ app.get("/v1/repositories/:owner/:slug/documents/*", async (req) => {
  * and return the new provenance summary in one round trip.
  */
 app.put("/v1/repositories/:owner/:slug/documents/*", async (req) => {
-  const { owner, slug, "*": path } = req.params as Record<string, string>;
+  const { owner, slug, "*": path } = req.params as { owner: string; slug: string; "*": string };
   const repo = mustFind(owner, slug);
   const body = z.object({
     content: z.string(),
@@ -113,16 +114,24 @@ app.put("/v1/repositories/:owner/:slug/documents/*", async (req) => {
     authoringSessionId: z.string().optional(),
   }).parse(req.body);
 
+  // Evidence is derived from what we actually recorded for the session, not
+  // from what the client asserts about itself.
+  const session = body.authoringSessionId
+    ? authoringSessions.get(body.authoringSessionId)
+    : undefined;
+  const evidence = session ? evidenceFor(session) : body.evidence;
+
   const result = await gitd.commit(repo.id, {
     ref: "refs/heads/main",
     message: body.message,
     author: demoAuthor,
     newTextOrigin: "human_written",
-    evidence: body.evidence,
+    evidence,
     changes: [{ path, content: body.content }],
   });
+  if (session) authoringSessions.attachCommit(session.id, result.sha);
   repos.touch(repo.id);
-  return result;
+  return { ...result, evidence };
 });
 
 // -------------------------------------------------------- history & diffs
@@ -169,21 +178,37 @@ app.get("/v1/repositories/:owner/:slug/provenance", async (req) => {
 
 // ------------------------------------------------- authoring sessions (§7.5)
 
-app.post("/v1/repositories/:owner/:slug/sessions", async (req) => {
+/**
+ * Authoring sessions (§7.5). These endpoints persist what they accept — see
+ * sessions.ts for why that is worth stating.
+ */
+app.post("/v1/repositories/:owner/:slug/sessions", async (req, reply) => {
   const { owner, slug } = req.params as { owner: string; slug: string };
-  mustFind(owner, slug);
-  const body = z.object({ path: z.string(), client: z.string().default("write_web") }).parse(req.body);
-  return { sessionId: newAuthoringSessionId(), path: body.path, startedAt: new Date().toISOString() };
+  const repo = mustFind(owner, slug);
+  const body = z.object({
+    path: z.string(),
+    client: z.string().default("write_web"),
+  }).parse(req.body);
+
+  const session = authoringSessions.open({
+    repoId: repo.id, userId: demoAuthor.id, path: body.path, client: body.client,
+  });
+  return reply.status(201).send({
+    sessionId: session.id, path: session.path, startedAt: session.startedAt,
+  });
 });
 
 /**
  * Aggregates and non-typed input events only. The client never sends a keylog
- * and the server would not store one (§7.5.1).
+ * and the server would not store one (§7.5.1). Events carry a content hash,
+ * never the text.
  */
 app.patch("/v1/sessions/:id", async (req) => {
+  const { id } = req.params as { id: string };
   const body = z.object({
-    keystrokes: z.number().int().nonnegative().default(0),
-    modeWords: z.record(z.number()).default({}),
+    keystrokes: z.number().int().nonnegative().optional(),
+    medianWpm: z.number().nullable().optional(),
+    modeWords: z.record(z.number()).optional(),
     events: z.array(z.object({
       inputMode: z.enum(["pasted", "dictated", "composed", "dropped", "imported", "ai_tool", "synthetic"]),
       charCount: z.number().int(),
@@ -193,7 +218,44 @@ app.patch("/v1/sessions/:id", async (req) => {
       occurredAt: z.string(),
     })).default([]),
   }).parse(req.body);
-  return { recorded: body.events.length, keystrokes: body.keystrokes };
+
+  const session = authoringSessions.update(id, body);
+  if (!session) throw notFound(`Authoring session ${id}`);
+  return {
+    sessionId: session.id,
+    keystrokes: session.keystrokes,
+    eventsRecorded: session.events.length,
+    modeWords: session.modeWords,
+  };
+});
+
+app.post("/v1/sessions/:id/close", async (req) => {
+  const { id } = req.params as { id: string };
+  const session = authoringSessions.close(id);
+  if (!session) throw notFound(`Authoring session ${id}`);
+  return { sessionId: session.id, endedAt: session.endedAt, eventsRecorded: session.events.length };
+});
+
+app.get("/v1/sessions/:id", async (req) => {
+  const { id } = req.params as { id: string };
+  const session = authoringSessions.get(id);
+  if (!session) throw notFound(`Authoring session ${id}`);
+  return session;
+});
+
+/** The author's account of a paste, stored distinctly from what we observed. */
+app.patch("/v1/sessions/:id/events/:contentHash", async (req) => {
+  const { id, contentHash } = req.params as { id: string; contentHash: string };
+  const body = z.object({ authorNote: z.string().min(1).max(500) }).parse(req.body);
+  const event = authoringSessions.annotate(id, contentHash, body.authorNote);
+  if (!event) throw notFound(`Input event ${contentHash}`);
+  return { recorded: true, event, note: "Stored as your account of this paste, not as an observation." };
+});
+
+app.get("/v1/repositories/:owner/:slug/sessions", async (req) => {
+  const { owner, slug } = req.params as { owner: string; slug: string };
+  const repo = mustFind(owner, slug);
+  return { sessions: authoringSessions.forRepo(repo.id) };
 });
 
 const port = Number(process.env.API_PORT ?? 4000);

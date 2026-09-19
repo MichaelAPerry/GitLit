@@ -17,7 +17,7 @@ Phases 0–2 of the build order (§15).
 | `packages/provenance` | Spans, trailers, signed receipt chain (§7) | 28 tests |
 | `packages/db` | Drizzle schema for §11 | typechecked |
 | `apps/gitd` | The commit path — the only writer of provenance (§5) | 16 tests |
-| `apps/api` | REST surface (§12) | — |
+| `apps/api` | REST surface (§12) | 13 tests |
 | `apps/web` | Dashboard + GitLit Write (§7.5) | — |
 | `apps/mcp` | MCP server — how the AI Researcher executes (§8) | 55 tests |
 
@@ -49,7 +49,7 @@ Then open http://localhost:3000.
 ## Checks
 
 ```bash
-pnpm test        # 155 tests
+pnpm test        # 178 tests
 pnpm typecheck
 ```
 
@@ -89,6 +89,25 @@ the list of refs that actually exist.
 computed locally and deterministically (`novelty/lexical-v1`) so anyone with a
 clone can reproduce them offline. The agent's rationale and its declared model
 are stored as *claims* and rendered as such.
+
+## Known gaps — read this before trusting the build
+
+These are staging, not surprises. What is *not* on this list is real and tested.
+
+| Gap | Consequence today | Blocks |
+|---|---|---|
+| **No auth.** Hardcoded `u_demo`; every repo owned by `demo`. | Anyone reaching the API can do anything. No login, no permissions, no collaborator checks. | Any deployment. |
+| **Postgres not wired.** Schema typechecks; nothing imports it. | Repositories and authoring sessions are in-memory and die with the API process. Git history survives — it is on disk — so nothing a commit recorded is lost. | Multi-process, restarts. |
+| **Git smart HTTP not implemented** (§12.7). | `git clone` of a GitLit repo does not work over the network yet, though the repos on disk are ordinary bare Git repos. | The "clone it and verify offline" promise. |
+| **No OAuth on the MCP HTTP transport.** | Any bearer token maps to the demo user. | Multi-user MCP. |
+| **Novelty scoring is lexical**, not semantic. | Verdicts are weaker than the design intends. The tool says so rather than implying otherwise. | Quality, not correctness. |
+| **Composer is a `<textarea>`**, not TipTap. | No rich text. The input provenance model is real and wired. | Editing comfort. |
+| **No web tests.** | UI regressions are uncaught. | Confidence in `apps/web`. |
+
+Signing keys are **not** on this list any more: they persist per repo, survive
+restarts, are wrapped with AES-256-GCM when `SIGNING_MASTER_KEY` is set, and the
+service refuses to start rather than regenerate a key and orphan an existing
+receipt chain.
 
 ## What is deliberately absent
 

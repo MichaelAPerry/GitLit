@@ -1,9 +1,9 @@
 import Fastify from "fastify";
 import { z } from "zod";
 import { GitLitError } from "@gitlit/core";
-import { generateSigningKey } from "@gitlit/provenance";
 import { initRepo, readFileAt, repoPath, log, resolveHead, listTree } from "./repo.js";
 import { writeCommit } from "./commit-path.js";
+import { KeyStore } from "./keystore.js";
 
 const REPO_ROOT = process.env.REPO_ROOT ?? "./repos";
 
@@ -15,13 +15,11 @@ const REPO_ROOT = process.env.REPO_ROOT ?? "./repos";
 export function buildServer() {
   const app = Fastify({ logger: true });
 
-  // Dev-only in-memory key store. Production wraps these with KMS (§14).
-  const keys = new Map<string, ReturnType<typeof generateSigningKey>>();
-  const keyFor = (repoId: string) => {
-    let k = keys.get(repoId);
-    if (!k) { k = generateSigningKey(`key_${repoId}`); keys.set(repoId, k); }
-    return k;
-  };
+  // Keys are persisted beside each repo and survive restarts (§7.4). An
+  // in-memory store here would make every receipt unverifiable after a
+  // restart, which is the opposite of what receipts are for.
+  const keys = new KeyStore((repoId) => repoPath(REPO_ROOT, repoId));
+  const keyFor = (repoId: string) => keys.for(repoId);
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof GitLitError) return reply.status(err.status).send(err.toProblem());
@@ -36,6 +34,11 @@ export function buildServer() {
     const gitdir = repoPath(REPO_ROOT, body.repoId);
     await initRepo(gitdir, body.defaultBranch);
     return { gitdir, publicKey: keyFor(body.repoId).publicKey };
+  });
+
+  app.get("/repos/:repoId/public-key", async (req) => {
+    const { repoId } = req.params as { repoId: string };
+    return { keyId: keyFor(repoId).keyId, publicKey: keys.publicKey(repoId) };
   });
 
   app.get("/repos/:repoId/blob", async (req) => {

@@ -24,24 +24,71 @@ export function Composer({
   const { events, aggregates, handlers } = useInputProvenance();
   const textarea = useRef<HTMLTextAreaElement>(null);
   const dirty = useRef(false);
+  const sessionId = useRef<string | null>(null);
+  const sentEvents = useRef(0);
 
   const words = (text.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) ?? []).length;
+
+  /** Open an authoring session lazily, on the first keystroke of real work. */
+  const ensureSession = useCallback(async (): Promise<string | null> => {
+    if (sessionId.current) return sessionId.current;
+    try {
+      const res = await fetch(`${API}/v1/repositories/${owner}/${slug}/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path, client: "write_web" }),
+      });
+      if (!res.ok) return null;
+      const { sessionId: id } = (await res.json()) as { sessionId: string };
+      sessionId.current = id;
+      return id;
+    } catch {
+      return null;
+    }
+  }, [owner, path, slug]);
+
+  /** Push aggregates and any new non-typed events. Never a keylog (§7.5.1). */
+  const syncSession = useCallback(async (): Promise<string | null> => {
+    const id = await ensureSession();
+    if (!id) return null;
+    const pending = events.slice(sentEvents.current);
+    try {
+      await fetch(`${API}/v1/sessions/${id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          keystrokes: aggregates.keystrokes,
+          medianWpm: aggregates.medianWpm,
+          modeWords: aggregates.modeWords,
+          events: pending.filter((e) => e.contentHash !== "pending"),
+        }),
+      });
+      sentEvents.current = events.length;
+    } catch {
+      /* retried on the next save */
+    }
+    return id;
+  }, [aggregates, ensureSession, events]);
 
   const save = useCallback(async () => {
     if (!dirty.current) return;
     dirty.current = false;
     setStatus("Saving…");
     try {
-      const evidence = [
-        `typed_words:${aggregates.modeWords["typed"] ?? words}`,
-        ...events.map((e) => `${e.inputMode}:${e.wordCount}`),
-      ];
+      // Sync the session first so the commit's evidence is derived from what
+      // the server recorded, not from what this client asserts about itself.
+      const id = await syncSession();
       const res = await fetch(
         `${API}/v1/repositories/${owner}/${slug}/documents/${path}`,
         {
           method: "PUT",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ content: text, message: `Write ${path.split("/").pop()}`, evidence }),
+          body: JSON.stringify({
+            content: text,
+            message: `Write ${path.split("/").pop()}`,
+            authoringSessionId: id ?? undefined,
+            evidence: id ? undefined : ["client:write_web", "session_unavailable"],
+          }),
         },
       );
       if (!res.ok) throw new Error(await res.text());
@@ -52,7 +99,7 @@ export function Composer({
       dirty.current = true;
       setStatus("Could not save — the API may not be running");
     }
-  }, [aggregates.modeWords, events, owner, path, slug, text, words]);
+  }, [owner, path, slug, syncSession, text]);
 
   // Autosave on a pause, so a session becomes a continuous record rather than
   // a handful of large jumps.
@@ -69,6 +116,15 @@ export function Composer({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [save]);
+
+  useEffect(() => {
+    return () => {
+      const id = sessionId.current;
+      if (!id) return;
+      // Best-effort close; keepalive lets it survive the page going away.
+      void fetch(`${API}/v1/sessions/${id}/close`, { method: "POST", keepalive: true });
+    };
+  }, []);
 
   const pasted = events.filter((e) => e.inputMode === "pasted");
 
