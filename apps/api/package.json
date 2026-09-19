@@ -1,0 +1,22 @@
+{
+  "name": "@gitlit/api",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --clean",
+    "dev": "node --experimental-strip-types --watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.1",
+    "@gitlit/core": "workspace:*",
+    "@gitlit/db": "workspace:*",
+    "@gitlit/diff": "workspace:*",
+    "@gitlit/prose": "workspace:*",
+    "@gitlit/provenance": "workspace:*",
+    "fastify": "^5.2.0",
+    "zod": "^3.24.1"
+  }
+}

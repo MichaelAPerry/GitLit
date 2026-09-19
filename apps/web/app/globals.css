@@ -1,0 +1,150 @@
+/*
+ * GitLit is a writing tool that happens to do version control, not a dev tool
+ * that happens to hold prose. The palette is paper-like and quiet; the prose
+ * itself is the only thing with real contrast.
+ */
+:root {
+  --paper: #fbfaf7;
+  --paper-raised: #ffffff;
+  --ink: #1b1a17;
+  --ink-soft: #55514a;
+  --ink-faint: #8a857c;
+  --rule: #e4e0d8;
+  --accent: #6b5b95;
+
+  /* Provenance colours. Machine origin is cool, human warm. */
+  --prov-ai: #7a6bb5;
+  --prov-hybrid: #b08a5a;
+  --prov-human: #5a8a6b;
+  --prov-unknown: #9a958c;
+
+  --radius: 10px;
+  --serif: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #16161a;
+    --paper-raised: #1e1e23;
+    --ink: #eceae5;
+    --ink-soft: #b3aea5;
+    --ink-faint: #7e7a72;
+    --rule: #2e2e35;
+    --accent: #a294d4;
+    --prov-ai: #a294d4;
+    --prov-hybrid: #d4ab74;
+    --prov-human: #7fb894;
+    --prov-unknown: #86817a;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #16161a; --paper-raised: #1e1e23; --ink: #eceae5; --ink-soft: #b3aea5;
+  --ink-faint: #7e7a72; --rule: #2e2e35; --accent: #a294d4;
+  --prov-ai: #a294d4; --prov-hybrid: #d4ab74; --prov-human: #7fb894; --prov-unknown: #86817a;
+}
+
+* { box-sizing: border-box; }
+html, body { padding: 0; margin: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; text-decoration: none; }
+button { font: inherit; cursor: pointer; }
+
+.wrap { max-width: 68rem; margin: 0 auto; padding: 0 16px; }
+.header {
+  border-bottom: 1px solid var(--rule);
+  padding: 18px 0;
+  margin-bottom: 40px;
+}
+.header-inner { display: flex; align-items: baseline; gap: 20px; }
+.brand { font-family: var(--serif); font-size: 1.35rem; letter-spacing: -0.01em; }
+.brand span { color: var(--accent); }
+.tagline { color: var(--ink-faint); font-size: 0.82rem; }
+.spacer { flex: 1; }
+
+.btn {
+  background: var(--accent); color: #fff; border: 0;
+  padding: 9px 16px; border-radius: var(--radius); font-size: 0.9rem;
+}
+.btn.secondary { background: transparent; color: var(--ink-soft); border: 1px solid var(--rule); }
+.btn:hover { opacity: 0.9; }
+
+.card {
+  background: var(--paper-raised); border: 1px solid var(--rule);
+  border-radius: var(--radius); padding: 20px; margin-bottom: 14px;
+}
+.card h3 { margin: 0 0 4px; font-family: var(--serif); font-weight: 600; font-size: 1.15rem; }
+.meta { color: var(--ink-faint); font-size: 0.82rem; }
+
+label { display: block; font-size: 0.85rem; color: var(--ink-soft); margin: 16px 0 6px; }
+input, select, textarea {
+  width: 100%; padding: 10px 12px; font: inherit;
+  background: var(--paper-raised); color: var(--ink);
+  border: 1px solid var(--rule); border-radius: var(--radius);
+}
+input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+.empty { text-align: center; padding: 64px 16px; color: var(--ink-faint); }
+.empty h2 { font-family: var(--serif); color: var(--ink-soft); font-weight: 500; }
+
+/* --- provenance --- */
+.prov-bar { display: flex; height: 8px; border-radius: 999px; overflow: hidden; background: var(--rule); }
+.prov-seg { height: 100%; }
+.prov-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; font-size: 0.8rem; color: var(--ink-soft); }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+.ai { background: var(--prov-ai); }
+.hybrid { background: var(--prov-hybrid); }
+.human { background: var(--prov-human); }
+.unknown { background: var(--prov-unknown); }
+
+/* --- timeline (§10) --- */
+.timeline { position: relative; padding-left: 22px; }
+.timeline::before {
+  content: ""; position: absolute; left: 6px; top: 6px; bottom: 6px;
+  width: 2px; background: var(--rule);
+}
+.tl-item { position: relative; padding: 10px 0; }
+.tl-dot {
+  position: absolute; left: -21px; top: 16px;
+  width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--paper);
+}
+.tl-subject { font-size: 0.92rem; }
+.tl-meta { color: var(--ink-faint); font-size: 0.78rem; }
+.phase-band {
+  font-family: var(--mono); font-size: 0.7rem; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--ink-faint); margin: 20px 0 4px;
+}
+
+/* --- editor (GitLit Write, §7.5) --- */
+.write-shell { min-height: 100vh; display: flex; flex-direction: column; }
+.write-bar {
+  border-bottom: 1px solid var(--rule); padding: 10px 0;
+  font-size: 0.82rem; color: var(--ink-faint);
+  position: sticky; top: 0; background: var(--paper); z-index: 5;
+}
+.write-bar-inner { display: flex; align-items: center; gap: 14px; }
+.write-area { flex: 1; display: flex; justify-content: center; padding: 48px 16px 96px; }
+.composer {
+  width: 100%; max-width: 38rem;
+  font-family: var(--serif); font-size: 1.12rem; line-height: 1.75;
+  background: transparent; border: 0; outline: none; resize: none;
+  color: var(--ink); min-height: 60vh; padding: 0;
+}
+.composer::placeholder { color: var(--ink-faint); }
+.saved { color: var(--prov-human); }
+.pending { color: var(--prov-hybrid); }
+
+.notice {
+  border: 1px solid var(--rule); border-left: 3px solid var(--accent);
+  background: var(--paper-raised); border-radius: var(--radius);
+  padding: 12px 14px; font-size: 0.85rem; color: var(--ink-soft); margin: 14px 0;
+}
+.grid { display: grid; gap: 14px; grid-template-columns: 1fr; }
+@media (min-width: 720px) { .grid.two { grid-template-columns: 1.6fr 1fr; } }

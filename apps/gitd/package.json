@@ -1,0 +1,23 @@
+{
+  "name": "@gitlit/gitd",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --clean",
+    "dev": "node --experimental-strip-types --watch src/server.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@gitlit/core": "workspace:*",
+    "@gitlit/diff": "workspace:*",
+    "@gitlit/prose": "workspace:*",
+    "@gitlit/provenance": "workspace:*",
+    "fastify": "^5.2.0",
+    "isomorphic-git": "^1.29.0",
+    "zod": "^3.24.1"
+  }
+}
