@@ -19,6 +19,7 @@ Phases 0–2 of the build order (§15).
 | `apps/gitd` | The commit path — the only writer of provenance (§5) | 16 tests |
 | `apps/api` | REST surface (§12) | — |
 | `apps/web` | Dashboard + GitLit Write (§7.5) | — |
+| `apps/mcp` | MCP server — how the AI Researcher executes (§8) | 55 tests |
 
 ## Two properties worth knowing before reading the code
 
@@ -48,13 +49,56 @@ Then open http://localhost:3000.
 ## Checks
 
 ```bash
-pnpm test        # 83 tests
+pnpm test        # 155 tests
 pnpm typecheck
 ```
 
+## Connecting from Claude
+
+GitLit holds no model API key. The research in feature 2 runs on the author's
+own Claude, which connects to GitLit over MCP (§2.6).
+
+**Claude desktop / web** — the default on-ramp, no terminal needed:
+
+```bash
+pnpm --filter @gitlit/mcp build && node apps/mcp/dist/http.js   # :4002/mcp
+```
+
+Then add `http://localhost:4002/mcp` as a connector in Claude's settings.
+
+**Claude Code:**
+
+```bash
+claude mcp add gitlit -- node /path/to/GitLit/apps/mcp/dist/stdio.js
+```
+
+Ten tools, and note what is missing: **there is no tool that writes prose.**
+`gitlit_commit_architecture` can only write `manuscript_architecture.md` and
+`.gitlit/**` — the path allowlist lives in `packages/core` and is enforced
+again in gitd's commit path.
+
+Two properties are worth understanding before trusting the output:
+
+**The ledger cannot be faked.** `gitlit_search_prior_works` runs the query
+itself and writes every hit to the ledger *before* returning it;
+`gitlit_add_source` fetches and hashes the URL server-side and stores the
+excerpt *it* retrieved. A citation the agent invents fails at commit time with
+the list of refs that actually exist.
+
+**The scores are ours; the reasoning is the agent's.** Novelty numbers are
+computed locally and deterministically (`novelty/lexical-v1`) so anyone with a
+clone can reproduce them offline. The agent's rationale and its declared model
+are stored as *claims* and rendered as such.
+
 ## What is deliberately absent
 
-- **MCP server** (Phase 4) — how the AI Researcher actually executes (§8).
+- **Local embeddings.** Novelty scoring is lexical today. The `Embedder`
+  interface and the pinned-model slot exist (`src/novelty.ts`); the bge-small
+  ONNX weights are Phase 5. Until then the tool says its scores are lexical
+  rather than implying semantic comparison.
+- **OAuth.** The HTTP transport takes a bearer token placeholder; §12.8's
+  OAuth 2.1 flow maps it to a user. The tool layer is already user-scoped, so
+  that swap does not reach the tools.
 - **Postgres wiring.** The schema is written and typechecks; the API still uses an
   in-memory index. Because Postgres is only an index over Git (§2.3), swapping it
   in changes no provenance behaviour.
