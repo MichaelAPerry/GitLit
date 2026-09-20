@@ -34,19 +34,25 @@ just asserted in tests:
 
 In severity order. Each names the file and what "done" means.
 
-### 2.1 No backups — do not skip this one
+### 2.1 Backups — DONE
 
-`gitd`'s volume is the only copy of every manuscript. §4.1 specifies nightly
-`git bundle` snapshots to object storage; none of it exists.
+`apps/gitd/src/backup.ts`, with `backup-cli.js` for cron. Bundles are verified
+before they count, pruning happens only after a clean run, and a corrupt
+repository is reported as failed rather than empty.
 
-For a product whose pitch is *your history is safe here*, shipping without
-this is the one thing I would refuse. **No real author should put a real book
-in GitLit until this exists and a restore has actually been run.**
+Rehearsed rather than assumed: a book was written, the volume deleted
+entirely, the bundle restored, and the chain verified 4/4 from the restored
+repository alone.
 
-- Add a bundle job to `apps/worker` (or a cron in `gitd`) walking `REPO_ROOT`.
-- `git bundle create <repo>.bundle --all` per repository, upload to R2/S3.
-- **Done means:** a restore from a bundle into an empty volume has been
-  performed and the receipt chain still verifies afterwards.
+**The rehearsal found a flaw that had been present all along.** Signing keys
+lived only in the gitdir, and public keys were never committed — so a restore
+recovered the manuscript and every receipt, and could verify none of them.
+Worse, the same gap meant a plain `git clone` could not verify either, which
+made §2.3 and §7.4's central promise untrue in the shipped build. Public keys
+now live at `.gitlit/keys/<id>.pub` inside the history.
+
+Still worth doing: copy `BACKUP_DIR` offsite (`aws s3 sync`, rclone) — the
+store is a directory precisely so that stays the operator's choice.
 
 ### 2.2 Nobody can sign in
 

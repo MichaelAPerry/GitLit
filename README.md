@@ -51,7 +51,7 @@ Then open http://localhost:3000.
 ## Checks
 
 ```bash
-pnpm test        # 515 tests
+pnpm test        # 538 tests
 pnpm typecheck
 pnpm --filter @gitlit/web test:e2e   # 4 real-browser tests
 ```
@@ -146,6 +146,40 @@ detail inside a changed sentence and moves reported as moves.
 
 All of it is deterministic and local (§2.7) — declared links and lexical
 overlap only, so the numbers reproduce offline from a clone.
+
+## Backups
+
+```bash
+REPO_ROOT=./repos BACKUP_DIR=/mnt/backups pnpm --filter @gitlit/gitd backup
+```
+
+Every repository is bundled with `git bundle --all`, and each bundle is
+verified before it counts — a bundle that cannot restore is not a backup, and
+that is only discoverable in advance. Stale bundles are pruned **only after a
+clean run**, because deleting old copies on the strength of a partly failed
+run is how one bad night becomes permanent loss.
+
+A corrupt repository is reported as **failed**, never as empty. Collapsing
+those would quietly drop a damaged book from the backup set while the run
+still looked clean.
+
+Restore, which the same module owns because a backup nobody has restored is a
+hypothesis:
+
+```bash
+pnpm --filter @gitlit/gitd backup -- --restore /mnt/backups/<id>.bundle /repos/ab/cd/<id>.git
+```
+
+**Public keys are committed into each repository** at `.gitlit/keys/<id>.pub`.
+This is what makes §7.4's offline verification real: without it a clone
+carries a receipt chain it has no way to check, and the verifier would have to
+ask our servers for the key — the exact dependency receipts exist to remove.
+It also means losing the volume stops new receipts but never invalidates
+existing ones.
+
+Verified by rehearsal, not assumed: a book is written, the volume is deleted
+entirely, the bundle is restored, and the chain verifies 4/4 using only what
+the restored repository contains.
 
 ## Git access
 

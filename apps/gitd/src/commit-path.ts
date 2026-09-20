@@ -13,6 +13,20 @@ import {
 import { commitChanges, readFileAt, type FileChange } from "./repo.js";
 
 const RECEIPT_CHAIN = ".gitlit/receipts/chain.jsonl";
+
+/**
+ * Public keys live IN the repository (§7.4).
+ *
+ * Without this, a clone carries a receipt chain it has no way to check and
+ * the offline-verification promise is empty — the verifier would have to ask
+ * our servers for the key, which is the dependency receipts exist to remove.
+ * A public key is public; committing it costs nothing and is the only thing
+ * that makes the chain self-contained.
+ *
+ * It also survives a restore. The private key sits on the volume; if that is
+ * lost, new receipts stop but every existing one stays verifiable.
+ */
+const keyPath = (keyId: string) => `.gitlit/keys/${keyId}.pub`;
 const sidecarPath = (p: string) => `.gitlit/provenance/${normalizePath(p)}.jsonl`;
 
 export interface WriteRequest {
@@ -117,6 +131,12 @@ export async function writeCommit(req: WriteRequest): Promise<WriteResult> {
     configVersion: cfg.version,
     receipt: receiptId,
   });
+
+  // Publish the verifying key alongside the first receipt it signs.
+  const publicKeyPath = keyPath(req.signingKey.keyId);
+  if ((await readFileAt(req.gitdir, req.ref, publicKeyPath)) === null) {
+    fileChanges.push({ path: publicKeyPath, content: req.signingKey.publicKey });
+  }
 
   const chainText = await readFileAt(req.gitdir, req.ref, RECEIPT_CHAIN);
   const chain: Receipt[] = chainText ? receiptsFromJsonl(chainText) : [];
