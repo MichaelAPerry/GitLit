@@ -1,0 +1,51 @@
+# fly deploy -c apps/api/fly.toml
+#
+# The API is stateless: it owns no files, and every machine is equivalent, so
+# this one scales horizontally without ceremony. Postgres is the only state,
+# and it is attached, not deployed here.
+
+app = "gitlit-api"
+primary_region = "iad"
+
+[build]
+  dockerfile = "../../Dockerfile"
+  build-target = "api"
+
+# Runs on one temporary machine before any new machine takes traffic. A failed
+# migration aborts the deploy, so a new image never starts against an old
+# schema — and because it runs BEFORE the rollout, migrations must be
+# backwards compatible with the image still serving. Add a column, deploy,
+# then start writing to it; never drop one in the same release that stops
+# using it.
+[deploy]
+  release_command = "node /migrate/dist/migrate-cli.js"
+  strategy = "rolling"
+
+[env]
+  NODE_ENV = "production"
+  API_PORT = "4000"
+  GITD_URL = "http://gitlit-gitd.internal:4001"
+  PUBLIC_API_URL = "https://api.gitlit.app"
+  PUBLIC_WEB_URL = "https://gitlit.app"
+
+# Set with `fly secrets set`, never here:
+#   DATABASE_URL GITD_SERVICE_TOKEN RESEND_API_KEY MAIL_FROM
+#   GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET
+
+[http_service]
+  internal_port = 4000
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "15s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

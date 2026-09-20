@@ -1,0 +1,17 @@
+# Never copy a host install into the image: it is platform-specific and would
+# shadow the one the build installs.
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+.git
+.env
+.env.*
+!.env.example
+**/*.test.ts
+**/*.test.tsx
+**/test-results
+**/playwright-report
+repos
+.gitlit-dev-db
+backups

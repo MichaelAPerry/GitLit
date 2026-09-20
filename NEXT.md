@@ -10,7 +10,7 @@ How to run it and what each package does: [`README.md`](./README.md).
 
 ## 1. State
 
-585 tests across 12 packages. `pnpm typecheck` clean across 20 tasks.
+594 tests across 12 packages. `pnpm typecheck` clean across 20 tasks.
 
 The product works end to end and has been driven against live services, not
 just asserted in tests:
@@ -26,9 +26,9 @@ just asserted in tests:
 - The MCP server runs the full research flow with a real client.
 - Semantic novelty scoring runs on a pinned, bit-reproducible local model.
 
-**The product works. The operations are half built.** Backups, email sign-in
-and per-user MCP auth are done; deploy config and rate limits are not. What is
-left is §2.4 and §2.5.
+**The product works, and it deploys.** Backups, email sign-in, per-user MCP
+auth and deploy config are done. What is left is §2.5: rate limiting and error
+monitoring.
 
 ---
 
@@ -115,15 +115,51 @@ What changed:
 two tokens → two users with separate sessions, and that no token is read from
 the environment. Port 4002 is safe to expose.
 
-### 2.4 Nothing to deploy with
+### 2.4 Deploy config — **DONE**
 
-No Dockerfile, no fly.toml, no volume config.
+One `Dockerfile` with four targets (api, gitd, web, mcp), a `.dockerignore`,
+a full-stack `docker-compose.yml`, and a `fly.toml` per service.
 
-- Dockerfiles for `api`, `gitd`, `web`, `mcp`.
-- `fly.toml` for `gitd` **with a persistent volume** — this is the constraint
-  that rules out an all-serverless deploy (§4.1).
-- A migration step (`pnpm db:migrate`) in the release process.
-- **Done means:** a clean deploy from zero, and `git clone` works against it.
+- **Migrations run as a release command** on a temporary machine before any
+  new machine takes traffic: `node /migrate/dist/migrate-cli.js`. New
+  `packages/db/src/migrate.ts` uses drizzle-orm's own migrator rather than
+  `drizzle-kit`, which is a devDependency — a production image that has to
+  carry the dev toolchain to migrate is an image shipping a compiler to run a
+  web server.
+- **`gitd` is pinned to one always-on machine.** A Fly volume belongs to one
+  machine, so a second gitd gets a second empty volume: clones would 404 or
+  succeed depending on which machine answered, and nothing would log an error.
+  Scale it up, never out. The warning is at the top of `apps/gitd/fly.toml`.
+- `NEXT_PUBLIC_API_URL` is a **build arg**, not an env var: Next.js inlines it
+  into the client bundle, so setting it at runtime leaves the browser calling
+  localhost.
+
+**Rehearsed by building and running it, which found two bugs no test would
+have.** All four images build; compose comes up from empty volumes; the
+migration applies from inside the image; and a full path runs through the
+containers — sign in, create a repository, commit a chapter, `git clone` over
+smart HTTP, verify the receipt chain offline from that clone
+(`valid: true, verified 2/2`). The mail path was exercised against the real
+Resend API, which rejected a deliberately bad key: 401 surfaced verbatim in
+the log, 502 and a safe message to the author.
+
+The two bugs:
+
+1. **Every malformed request returned 500 "Internal error"** instead of 400. A
+   Zod failure fell through to the generic handler, so an author who omitted a
+   field was told the server was broken — and an operator's error monitoring
+   (§2.5, next) would have filled with alarms nobody caused. Now 400 with the
+   offending field named.
+2. **`gitd` defaulted `GITLIT_API_URL` to localhost.** Deployed, that resolves
+   to gitd itself, so it asks *itself* to authorize each clone: every clone
+   500s while `/health` reports ok throughout. It now refuses to start in
+   production without it. This is the shape worth remembering — a service that
+   is green and entirely broken — and it is only findable by deploying.
+
+**Not rehearsed:** Fly itself. The `fly.toml` files are unapplied, so app
+names, regions and volume sizes are a starting point, not a tested
+configuration. Postgres is assumed attached (`fly postgres create`), not
+deployed by these files.
 
 ### 2.5 Lower, but real
 
@@ -145,7 +181,7 @@ amount that can be lost.
 1. Backups + a rehearsed restore (§2.1)
 2. ~~MCP HTTP auth (§2.3) — smallest fix, removes a live hole~~ **DONE**
 3. ~~Email sending (§2.2)~~ **DONE**
-4. Deploy config (§2.4)
+4. ~~Deploy config (§2.4)~~ **DONE**
 5. Rate limits + Sentry (§2.5)
 
 **Then it is genuinely alpha**, and a small private test is reasonable.

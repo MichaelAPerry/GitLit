@@ -1,3 +1,12 @@
+# The whole stack, the way it is deployed: four services, one Postgres, and a
+# migration that runs to completion before the API starts.
+#
+#   docker compose up --build
+#
+# This is also the cheapest way to check a deploy before it reaches Fly: if
+# `docker compose up` comes up green from an empty volume, the images and the
+# release order are right.
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -11,8 +20,79 @@ services:
       test: ["CMD-SHELL", "pg_isready -U gitlit"]
       interval: 5s
       retries: 10
-  redis:
-    image: redis:7-alpine
-    ports: ["6379:6379"]
+
+  # Runs once and exits. Everything that reads the schema waits for it to
+  # succeed, so a new image never starts against an old schema.
+  migrate:
+    build: { context: ., target: api }
+    command: ["node", "/migrate/dist/migrate-cli.js"]
+    environment:
+      DATABASE_URL: postgresql://gitlit:gitlit@postgres:5432/gitlit
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  gitd:
+    build: { context: ., target: gitd }
+    environment:
+      NODE_ENV: production
+      GITD_PORT: 4001
+      GITD_SERVICE_TOKEN: ${GITD_SERVICE_TOKEN:-dev-service-token-change-me}
+      SIGNING_MASTER_KEY: ${SIGNING_MASTER_KEY:-}
+      REPO_ROOT: /data/repos
+      BACKUP_DIR: /data/backups
+      # gitd asks the API to authorize every clone and push. Unset, this
+      # resolves to gitd itself and all Git access 500s — so it refuses to
+      # start in production rather than come up green and broken.
+      GITLIT_API_URL: http://api:4000
+    volumes: ["gitlit_repos:/data"]
+    ports: ["4001:4001"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: { context: ., target: api }
+    environment:
+      NODE_ENV: production
+      API_PORT: 4000
+      DATABASE_URL: postgresql://gitlit:gitlit@postgres:5432/gitlit
+      GITD_URL: http://gitd:4001
+      GITD_SERVICE_TOKEN: ${GITD_SERVICE_TOKEN:-dev-service-token-change-me}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:4000}
+      PUBLIC_WEB_URL: ${PUBLIC_WEB_URL:-http://localhost:3000}
+      # Unset here on purpose: without it the API refuses to start in
+      # production, which is the behaviour worth having in front of you before
+      # you meet it on a deploy. Set it in .env to send real mail.
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+    depends_on:
+      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+      gitd: { condition: service_healthy }
+    ports: ["4000:4000"]
+
+  mcp:
+    build: { context: ., target: mcp }
+    environment:
+      NODE_ENV: production
+      MCP_PORT: 4002
+      GITLIT_API_URL: http://api:4000
+    depends_on: [api]
+    ports: ["4002:4002"]
+
+  web:
+    build:
+      context: .
+      target: web
+      # Baked in at build time: Next.js inlines NEXT_PUBLIC_* into the client
+      # bundle, so this cannot be changed by setting it at run time.
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+    depends_on: [api]
+    ports: ["3000:3000"]
+
 volumes:
   gitlit_pg:
+  gitlit_repos:

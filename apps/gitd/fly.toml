@@ -1,0 +1,61 @@
+# fly deploy -c apps/gitd/fly.toml
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# gitd IS NOT HORIZONTALLY SCALABLE. Do not run more than one machine.
+#
+# It holds every manuscript on an attached volume, and a Fly volume belongs to
+# exactly one machine. A second machine gets a SECOND, EMPTY volume: clones
+# would succeed or 404 depending on which machine answered, pushes would land
+# on one copy of a book, and nothing would report an error. This is the
+# constraint that rules out an all-serverless deploy (§4.1).
+#
+# Scale it up, not out: a bigger VM and a bigger volume.
+# ─────────────────────────────────────────────────────────────────────────────
+
+app = "gitlit-gitd"
+primary_region = "iad"
+
+[build]
+  dockerfile = "../../Dockerfile"
+  build-target = "gitd"
+
+[env]
+  NODE_ENV = "production"
+  GITD_PORT = "4001"
+  REPO_ROOT = "/data/repos"
+  BACKUP_DIR = "/data/backups"
+  # gitd asks the API to authorize every clone and push. It refuses to start
+  # in production without this, because the old localhost default resolves to
+  # gitd itself: every clone 500s while /health stays green.
+  GITLIT_API_URL = "http://gitlit-api.internal:4000"
+
+# Set with `fly secrets set`:
+#   GITD_SERVICE_TOKEN — without it anyone reaching gitd commits as anyone
+#   SIGNING_MASTER_KEY — wraps per-repo Ed25519 private keys at rest
+
+[mounts]
+  source = "gitlit_repos"
+  destination = "/data"
+  # Manuscripts. Grow it before it fills: a full volume fails writes, and the
+  # write it fails is someone's chapter.
+  initial_size = "10gb"
+
+[http_service]
+  internal_port = 4001
+  force_https = true
+  # Never suspend and never scale: one machine, always on. A suspended machine
+  # drops an in-flight clone, and a second machine gets its own empty volume.
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "15s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "1gb"

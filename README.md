@@ -17,10 +17,10 @@ Phases 0–2 of the build order (§15).
 | `packages/embed` | Pinned local embedding model (§2.7) | 24 tests |
 | `packages/provenance` | Spans, trailers, signed receipt chain (§7) | 28 tests |
 | `packages/auth` | Credentials, roles, OAuth, the authorization decision | 136 tests |
-| `packages/db` | Drizzle schema for §11, migrations, PGlite test harness | 13 tests |
+| `packages/db` | Drizzle schema for §11, migrations, PGlite test harness | 16 tests |
 | `packages/mail` | Sign-in email, Resend transport, the production guard | 24 tests |
-| `apps/gitd` | The commit path, backups, offline verification (§5, §7.4) | 75 tests |
-| `apps/api` | REST surface (§12), authorization enforcement | 50 tests |
+| `apps/gitd` | The commit path, backups, offline verification (§5, §7.4) | 79 tests |
+| `apps/api` | REST surface (§12), authorization enforcement | 52 tests |
 | `apps/web` | Dashboard, GitLit Write, Provenance Diff Viewer | 79 tests + 4 in-browser |
 | `apps/mcp` | MCP server — how the AI Researcher executes (§8) | 73 tests |
 
@@ -52,7 +52,7 @@ Then open http://localhost:3000.
 ## Checks
 
 ```bash
-pnpm test        # 585 tests
+pnpm test        # 594 tests
 pnpm typecheck
 pnpm --filter @gitlit/web test:e2e   # 4 real-browser tests
 ```
@@ -346,13 +346,62 @@ computed locally and deterministically (`novelty/lexical-v1`) so anyone with a
 clone can reproduce them offline. The agent's rationale and its declared model
 are stored as *claims* and rendered as such.
 
+## Deploying
+
+One Dockerfile, four images; `--target` picks the service, so the install and
+build stages are shared and the images cannot drift apart.
+
+```bash
+docker compose up --build     # the whole stack, locally
+```
+
+That is also the cheapest pre-flight: if compose comes up green from empty
+volumes, the images and the release order are right.
+
+```bash
+fly deploy -c apps/gitd/fly.toml    # deploy gitd first; the others call it
+fly deploy -c apps/api/fly.toml
+fly deploy -c apps/web/fly.toml
+fly deploy -c apps/mcp/fly.toml
+```
+
+**Migrations run as a release command**, on a temporary machine, before any
+new machine takes traffic — `node /migrate/dist/migrate-cli.js`, using the
+migrator built into drizzle-orm rather than `drizzle-kit`, which is a
+devDependency and has no business in a production image. A failed migration
+aborts the deploy. Because it runs *before* the rollout, a migration must be
+compatible with the image still serving: add a column, deploy, then write to
+it; never drop one in the release that stops using it.
+
+**`gitd` is not horizontally scalable, and this is the one thing to get right.**
+It holds every manuscript on an attached volume, and a Fly volume belongs to
+exactly one machine. A second machine gets a second, empty volume: clones
+would succeed or 404 depending on which machine answered, pushes would land on
+one copy of a book, and nothing would log an error. Scale it *up* — bigger VM,
+bigger volume — never out. `apps/gitd/fly.toml` pins it to one always-on
+machine.
+
+Three services refuse to start in production rather than come up green and
+broken: the API without `RESEND_API_KEY` (nobody could sign in), `gitd`
+without `GITD_SERVICE_TOKEN` (anyone reaching it could commit as anyone) and
+without `GITLIT_API_URL` (every clone 500s while `/health` stays green).
+
+**What the rehearsal actually proved.** The stack was built and run here, not
+just written: all four images build, compose comes up from empty volumes, the
+migration applies from inside the image, and a full path runs through the
+containers — sign in, create a repository, commit a chapter, `git clone` it
+over smart HTTP, and verify the receipt chain offline from that clone with
+nothing but what the clone contains. Two bugs came out of it that no unit test
+would have found; both are described in `NEXT.md` §2.4. What has *not* been
+rehearsed is Fly itself: the `fly.toml` files are unapplied, so treat app
+names, regions and volume sizes as a starting point.
+
 ## Known gaps — read this before trusting the build
 
 These are staging, not surprises. What is *not* on this list is real and tested.
 
 | Gap | Consequence today | Blocks |
 |---|---|---|
-| **No deploy config.** No Dockerfiles, no `fly.toml`, no volume for `gitd`. | It runs locally and nowhere else. | Anyone but you using it. |
 | **No rate limiting, no error monitoring.** | `/v1/auth/*` will take as many requests as a script can send, and a crash in production is invisible. | Leaving it exposed. |
 | **MCP auth is a GitLit API token, not §12.8's OAuth 2.1 flow.** | Per-user and enforced, but an author pastes a token rather than clicking through a consent screen. | A one-click connector. |
 | **Composer is a `<textarea>`**, not TipTap. | No rich text. The input provenance model is real and wired. | Editing comfort. |

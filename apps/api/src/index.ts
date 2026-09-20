@@ -1,6 +1,6 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
-import { z } from "zod";
+import { ZodError, z } from "zod";
 import { GitLitError, assertAgentWritable, forbidden, newRepoId, notFound } from "@gitlit/core";
 import {
   beatsForChapter, chapterIdForPath, diffPlanToProse, diffProse, paragraphsOf,
@@ -31,6 +31,21 @@ export const mailer = createMailer();
 
 app.setErrorHandler((err, _req, reply) => {
   if (err instanceof GitLitError) return reply.status(err.status).send(err.toProblem());
+  /**
+   * A body that does not parse is the client's mistake, not ours. Reporting it
+   * as 500 tells an author "Internal error" when they left out a field, and
+   * fills the operator's error monitoring with alarms nobody caused.
+   */
+  if (err instanceof ZodError) {
+    return reply.status(400).send({
+      type: "https://gitlit.app/errors/invalid-request",
+      title: "Invalid request",
+      status: 400,
+      detail: err.issues
+        .map((i) => `${i.path.join(".") || "body"}: ${i.message}`)
+        .join("; "),
+    });
+  }
   if (err instanceof OAuthError) {
     return reply.status(400).send({
       type: `https://gitlit.app/errors/oauth-${err.code}`,

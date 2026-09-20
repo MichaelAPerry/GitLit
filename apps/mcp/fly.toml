@@ -1,0 +1,39 @@
+# fly deploy -c apps/mcp/fly.toml
+#
+# The MCP server, which is how an author's own Claude reaches GitLit (§8.5).
+# It holds no credential of its own: every request carries the caller's GitLit
+# API token and every downstream call is made with that token, so this machine
+# is not a privileged principal and does not need to be treated as one.
+
+app = "gitlit-mcp"
+primary_region = "iad"
+
+[build]
+  dockerfile = "../../Dockerfile"
+  build-target = "mcp"
+
+[env]
+  NODE_ENV = "production"
+  MCP_PORT = "4002"
+  GITLIT_API_URL = "http://gitlit-api.internal:4000"
+
+[http_service]
+  internal_port = 4002
+  force_https = true
+  # Not "suspend": an MCP session is a long-lived stream of requests, and a
+  # suspended machine loses the in-memory session map, so a resumed
+  # mcp-session-id lands on a server that has never heard of it.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "15s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

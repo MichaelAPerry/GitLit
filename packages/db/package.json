@@ -12,14 +12,19 @@
     "./testing": {
       "types": "./dist/testing.d.ts",
       "import": "./dist/testing.js"
+    },
+    "./migrate": {
+      "types": "./dist/migrate.d.ts",
+      "import": "./dist/migrate.js"
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts src/testing.ts --format esm --dts --clean --external @electric-sql/pglite",
+    "build": "tsup src/index.ts src/testing.ts src/migrate.ts src/migrate-cli.ts --format esm --dts --clean --external @electric-sql/pglite",
     "generate": "drizzle-kit generate",
-    "migrate": "drizzle-kit migrate",
+    "migrate": "node dist/migrate-cli.js",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "migrate:kit": "drizzle-kit migrate"
   },
   "dependencies": {
     "@gitlit/core": "workspace:*",

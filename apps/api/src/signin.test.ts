@@ -94,3 +94,23 @@ describe("signing in by email", () => {
     expect(outbox.sent).toHaveLength(0);
   });
 });
+
+describe("malformed requests", () => {
+  it("is a 400 with the offending field, not a 500", async () => {
+    // Found by a deploy rehearsal: a missing field came back as
+    // "Internal error", which tells an author nothing and fills an
+    // operator's error monitoring with alarms nobody caused.
+    const res = await app.inject({
+      method: "POST", url: "/v1/auth/magic-link", payload: { email: 123 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().title).toBe("Invalid request");
+    expect(res.json().detail).toContain("email");
+  });
+
+  it("names every missing field, not just the first", async () => {
+    const res = await app.inject({ method: "POST", url: "/v1/auth/session", payload: {} });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().detail).toContain("token");
+  });
+});

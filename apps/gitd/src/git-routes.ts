@@ -7,7 +7,27 @@ import {
 import { parseReceivePackCommands } from "./pkt-line.js";
 import { repoPath } from "./repo.js";
 
-const API_URL = process.env.GITLIT_API_URL ?? "http://localhost:4000";
+/**
+ * Where to ask for an authorization decision.
+ *
+ * In production this must be set. Defaulting to localhost is fine on one
+ * machine and wrong everywhere else: deployed, gitd and the API are separate
+ * hosts, so the default resolves to gitd itself, every clone fails with a 500,
+ * and gitd's own health check stays green throughout. Found by a deploy
+ * rehearsal, which is the only place it can be found.
+ */
+const API_URL = (() => {
+  const url = process.env.GITLIT_API_URL;
+  if (url) return url;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "GITLIT_API_URL must be set in production. gitd asks the API to authorize " +
+        "every clone and push; without it that call resolves to gitd itself and " +
+        "all Git access fails while /health still reports ok.",
+    );
+  }
+  return "http://localhost:4000";
+})();
 const SERVICE_TOKEN = process.env.GITD_SERVICE_TOKEN;
 
 export const isGitRoute = (url: string): boolean =>
