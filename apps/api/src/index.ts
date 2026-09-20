@@ -17,6 +17,7 @@ import { ALL_SCOPES, MAGIC_LINK_TTL_MS, OAuthError, authorize, type Scope } from
 import { createMailer } from "@gitlit/mail";
 import { repos, type RepoRecord } from "./repos.js";
 import { allowedOrigins, originDecision } from "./cors.js";
+import { operatorState, requireOperator } from "./operator.js";
 import {
   ADDRESS_WINDOW_MS, addressLimiter, limitedResponse, overAuthLimit, registerRateLimit,
 } from "./rate-limit.js";
@@ -251,6 +252,33 @@ app.get("/v1/me", async (req) => {
 // ------------------------------------------------------------------ oauth
 
 app.get("/v1/auth/providers", async () => ({ providers: oauth.available() }));
+
+// ------------------------------------------------------------- operator
+//
+// Read by `gitlit-preflight`. Booleans and reasons only — see operator.ts for
+// why this does not ride on an author's session.
+
+app.get("/v1/operator/state", async (req) => {
+  requireOperator(req);
+
+  /**
+   * "Can the schema answer a question only the newest migration makes
+   * answerable." Comparing a stored version number would only prove that
+   * something wrote a number.
+   */
+  let migrationsApplied = true;
+  try {
+    await auth.getUser("u_preflight_probe_does_not_exist");
+  } catch {
+    migrationsApplied = false;
+  }
+
+  return operatorState({
+    corsOrigins: allowedOrigins(),
+    monitoring: monitoringOn,
+    migrationsApplied,
+  });
+});
 
 const callbackUri = (provider: string) => `${PUBLIC_URL}/v1/auth/oauth/${provider}/callback`;
 

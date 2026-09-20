@@ -46,6 +46,7 @@ services:
       # start in production rather than come up green and broken.
       GITLIT_API_URL: http://api:4000
       SENTRY_DSN: ${SENTRY_DSN:-}
+      OPERATOR_TOKEN: ${OPERATOR_TOKEN:-}
     volumes: ["gitlit_repos:/data"]
     ports: ["4001:4001"]
     healthcheck:
@@ -72,6 +73,8 @@ services:
       # Compose puts no proxy in front, so req.ip is already the caller's.
       # Trusting a hop here would let any client forge its own rate-limit key.
       TRUST_PROXY_HOPS: 0
+      # Lets `gitlit-preflight --token` read the settings checks.
+      OPERATOR_TOKEN: ${OPERATOR_TOKEN:-}
     depends_on:
       postgres: { condition: service_healthy }
       migrate: { condition: service_completed_successfully }

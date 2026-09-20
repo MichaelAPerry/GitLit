@@ -3,7 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "packageManager": "pnpm@10.33.0",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
@@ -12,7 +14,8 @@
     "lint": "turbo run lint",
     "db:generate": "pnpm --filter @gitlit/db generate",
     "db:migrate": "pnpm --filter @gitlit/db migrate",
-    "check": "pnpm typecheck && pnpm test"
+    "check": "pnpm typecheck && pnpm test",
+    "preflight": "pnpm --filter @gitlit/preflight build >/dev/null && node packages/preflight/dist/cli.js"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

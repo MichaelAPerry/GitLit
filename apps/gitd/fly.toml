@@ -34,6 +34,8 @@ primary_region = "iad"
 #   SIGNING_MASTER_KEY — required; without it the keys that make receipts
 #                        verifiable sit unencrypted on the volume
 #   SENTRY_DSN         — optional error monitoring
+#   OPERATOR_TOKEN     — optional; same value as on the API, so preflight can
+#                        check the signing keys and that backups restore
 
 [mounts]
   source = "gitlit_repos"

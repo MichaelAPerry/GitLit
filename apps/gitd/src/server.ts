@@ -1,12 +1,13 @@
 import Fastify from "fastify";
 import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import { GitLitError } from "@gitlit/core";
+import { GitLitError, constantTimeEquals } from "@gitlit/core";
 import { initMonitoring, reportError } from "@gitlit/observability";
 import { initRepo, readFileAt, repoPath, log, resolveHead, listTree } from "./repo.js";
 import { writeCommit } from "./commit-path.js";
 import { KeyStore } from "./keystore.js";
 import { isGitRoute, registerSmartHttp } from "./git-routes.js";
+import { gitdState } from "./operator.js";
 
 const REPO_ROOT = process.env.REPO_ROOT ?? "./repos";
 
@@ -48,7 +49,9 @@ export function buildServer() {
   app.addHook("onRequest", async (req, reply) => {
     // Git transport routes authenticate the end user themselves, against the
     // API, rather than with the internal service token.
-    if (req.url === "/health" || isGitRoute(req.url) || !serviceToken) return;
+    // The operator surface carries its own credential (OPERATOR_TOKEN) so that
+    // preflight needs one token rather than a different one per service.
+    if (req.url === "/health" || req.url === "/operator/state" || isGitRoute(req.url) || !serviceToken) return;
     const header = req.headers.authorization;
     const presented = header?.startsWith("Bearer ") ? header.slice(7).trim() : "";
     const a = Buffer.from(presented);
@@ -71,7 +74,32 @@ export function buildServer() {
     return reply.status(500).send({ title: "Internal error", status: 500 });
   });
 
-  app.get("/health", async () => ({ ok: true, service: "gitd", monitoring: monitoringOn }));
+  /**
+   * The machine id is here so preflight can tell whether more than one gitd is
+   * answering — the failure that silently splits the manuscripts across two
+   * disks. It identifies a machine, not a person, and Fly exposes it anyway.
+   */
+  app.get("/health", async () => ({
+    ok: true, service: "gitd", monitoring: monitoringOn,
+    machine: process.env.FLY_MACHINE_ID ?? process.env.HOSTNAME ?? "local",
+  }));
+
+  /**
+   * Operator surface: whether the signing keys are encrypted and whether the
+   * newest backup actually restores. Only gitd can answer either.
+   *
+   * Behind the service token, which the operator already holds — this reports
+   * where the deployment is weak, which is a useful list for the wrong reader.
+   */
+  app.get("/operator/state", async (req) => {
+    const expected = process.env.OPERATOR_TOKEN;
+    const header = req.headers.authorization;
+    const presented = header?.startsWith("Bearer ") ? header.slice(7).trim() : "";
+    if (!expected || !presented || !constantTimeEquals(expected, presented)) {
+      throw new GitLitError("forbidden", 403, "Forbidden", "Operator access is not available.");
+    }
+    return gitdState(REPO_ROOT);
+  });
 
   registerSmartHttp(app, REPO_ROOT);
 

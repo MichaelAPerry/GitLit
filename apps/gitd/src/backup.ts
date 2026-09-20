@@ -149,9 +149,18 @@ export async function bundleRepository(
   // provenance sidecars — those are the point of keeping the history at all.
   await run("git", ["--git-dir", gitdir, "bundle", "create", bundlePath, "--all"]);
 
-  // A bundle that cannot restore is not a backup. Fail loudly here rather
-  // than discover it on the day it matters.
-  await run("git", ["bundle", "verify", bundlePath]);
+  /**
+   * A bundle that cannot restore is not a backup. Fail loudly here rather
+   * than discover it on the day it matters.
+   *
+   * `--git-dir` is required: `git bundle verify` resolves the bundle's
+   * prerequisite commits against a repository, and with no repository in
+   * scope it exits with "need a repository to verify a bundle". That depends
+   * on the process's working directory, so it passed in a test run from
+   * inside the repo and failed for EVERY repository in the container, where
+   * the working directory is /app. Backups were not being taken at all.
+   */
+  await run("git", ["--git-dir", gitdir, "bundle", "verify", bundlePath]);
 
   // Capture the signing key beside the bundle so a restored repository can
   // keep issuing receipts rather than starting a new, orphaned chain.

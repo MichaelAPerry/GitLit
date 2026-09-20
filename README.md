@@ -20,8 +20,9 @@ Phases 0–2 of the build order (§15).
 | `packages/db` | Drizzle schema for §11, migrations, PGlite test harness | 16 tests |
 | `packages/mail` | Sign-in email, Resend transport, the production guard | 24 tests |
 | `packages/observability` | Error monitoring, and what may never leave the process | 51 tests |
-| `apps/gitd` | The commit path, backups, offline verification (§5, §7.4) | 82 tests |
-| `apps/api` | REST surface (§12), authorization enforcement, rate limits | 72 tests |
+| `packages/preflight` | Checks a running deployment for the silent failures | 29 tests |
+| `apps/gitd` | The commit path, backups, offline verification (§5, §7.4) | 83 tests |
+| `apps/api` | REST surface (§12), authorization enforcement, rate limits | 82 tests |
 | `apps/web` | Dashboard, GitLit Write, Provenance Diff Viewer | 79 tests + 4 in-browser |
 | `apps/mcp` | MCP server — how the AI Researcher executes (§8) | 73 tests |
 
@@ -53,7 +54,7 @@ Then open http://localhost:3000.
 ## Checks
 
 ```bash
-pnpm test        # 668 tests
+pnpm test        # 708 tests
 pnpm typecheck
 pnpm --filter @gitlit/web test:e2e   # 4 real-browser tests
 ```
@@ -463,6 +464,55 @@ the fix is not to send it, and `ContextLines` is now filtered out. Local
 variables are explicitly off too: a frame in the commit path has the chapter
 in scope. `packages/observability/src/wire.test.ts` asserts all of this
 against a real endpoint so it stays true.
+
+## Preflight — checking a deployment
+
+Every failure in DEPLOY.md's "three failures that look like success" shares one
+property: the service stays green while being broken. None is a property of
+the code, so no test suite can catch any of them — they are properties of a
+machine, a DNS record, a disk. `gitlit-preflight` is what you run against the
+real deployment instead.
+
+```bash
+pnpm preflight https://api.gitlit.app \
+  --web https://gitlit.app --token "$OPERATOR_TOKEN" --email you@yours.com \
+  --html report.html
+```
+
+It exits non-zero on a failure, so it can gate a deploy script. It changes
+nothing, except sending one sign-in email when `--email` is given.
+
+**Checks that need no credential** run from anywhere: the API answers, traffic
+is https, a stranger origin is refused, your dashboard is allowed *with
+credentials*, sign-in attempts are rate limited, no sign-in token comes back in
+a reply, and — by probing repeatedly and collecting machine ids — that exactly
+one gitd is answering.
+
+**Checks behind `OPERATOR_TOKEN`** read what only the services can see:
+NODE_ENV, whether the gitd password is still the published example, whether an
+origin is configured, whether mail is set up and its sending domain relates to
+the site, whether migrations are applied, whether the signing keys on the
+volume are encrypted, and whether the newest backup **actually opens and
+verifies** — the "restore one and look" step, run every time.
+
+The operator surface reports **booleans and reasons, never values**: "a
+non-default token is set" is what an operator needs; the token itself is what
+an attacker needs. It carries its own credential rather than riding on an
+author's session, because a list of where a deployment is weak should reach
+whoever can set secrets, not whoever happens to be signed in. Unset means off,
+not open.
+
+**It refuses to claim what it cannot know.** Whether the email arrived, and
+whether backups exist anywhere but that one disk, are reported as "go and
+look" — never as a pass. A tool that guessed there would be exactly the kind
+of green light the whole thing exists to distrust.
+
+Writing it found a bug that had made **every backup in the container fail**:
+`git bundle verify` resolves a bundle against a repository in scope, so
+without `--git-dir` it depends on the working directory. The test suite runs
+from inside the GitLit checkout and passed; the container runs from `/app` and
+backed up nothing, reporting each repository as failed in a log nobody was
+reading.
 
 ## Known gaps — read this before trusting the build
 

@@ -27,6 +27,7 @@ COPY packages/auth/package.json        packages/auth/
 COPY packages/db/package.json          packages/db/
 COPY packages/mail/package.json        packages/mail/
 COPY packages/observability/package.json packages/observability/
+COPY packages/preflight/package.json packages/preflight/
 COPY apps/api/package.json             apps/api/
 COPY apps/gitd/package.json            apps/gitd/
 COPY apps/web/package.json             apps/web/

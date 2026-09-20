@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 /** RFC 9457 problem details. Every API error serializes through this. */
 export class GitLitError extends Error {
   constructor(
@@ -41,3 +42,20 @@ export const conflict = (why: string) =>
  */
 export const toolRejected = (reason: string, why: string) =>
   new GitLitError("tool-rejected", 422, "Tool call rejected", why, { reject_reason: reason });
+
+/**
+ * Compare two secrets without leaking which one is longer, or where they
+ * first differ, through how long the comparison takes.
+ *
+ * A mismatched length still runs a real comparison rather than returning
+ * early: an early return is itself a measurable signal about the secret.
+ */
+export function constantTimeEquals(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) {
+    timingSafeEqual(ab, ab);
+    return false;
+  }
+  return timingSafeEqual(ab, bb);
+}

@@ -95,6 +95,29 @@ describe("bundling", () => {
     execFileSync("git", ["bundle", "verify", path.join(backupDir, result.bundleName)]);
   });
 
+  it("works when the process is NOT inside a git repository", async () => {
+    /**
+     * The container's working directory is /app, which is not a repository.
+     * `git bundle verify` resolves the bundle's prerequisites against a
+     * repository in scope, so without --git-dir it exits with "need a
+     * repository to verify a bundle" — and EVERY backup failed in the
+     * deployed container while this suite passed, because vitest runs from
+     * inside the GitLit checkout.
+     *
+     * This test reproduces the container by leaving the repository first.
+     */
+    const gitdir = await seedRepository("repo_NOTINAREPO0000000000000");
+    const outside = await fs.promises.mkdtemp(path.join(os.tmpdir(), "gitlit-outside-"));
+    const previous = process.cwd();
+    try {
+      process.chdir(outside);
+      const result = (await bundleRepository(gitdir, backupDir))!;
+      expect(result.refs).toBeGreaterThan(0);
+    } finally {
+      process.chdir(previous);
+    }
+  });
+
   it("skips an empty repository instead of failing the run", async () => {
     const gitdir = repoPath(root, "repo_DDDDDDDDDDDDDDDDDDDDDDDDDD");
     await initRepo(gitdir);

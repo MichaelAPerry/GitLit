@@ -250,6 +250,8 @@ importers:
         specifier: ^8.47.0
         version: 8.55.2
 
+  packages/preflight: {}
+
   packages/prose:
     dependencies:
       '@gitlit/core':

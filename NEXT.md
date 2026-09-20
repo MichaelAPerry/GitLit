@@ -10,7 +10,7 @@ How to run it and what each package does: [`README.md`](./README.md).
 
 ## 1. State
 
-661 tests across 13 packages. `pnpm typecheck` clean across 22 tasks.
+708 tests across 14 packages. `pnpm typecheck` clean across 22 tasks.
 
 The product works end to end and has been driven against live services, not
 just asserted in tests:
@@ -214,6 +214,43 @@ with none refused.
 **Still per machine:** the limiters are in-memory, so N API machines means N
 times the limit. Correct at one machine, wrong the moment the API scales out —
 that needs a shared store (Redis is already in compose).
+
+---
+
+### 2.6 Checking a deployment — **DONE** (added after the fact)
+
+New `packages/preflight` and `pnpm preflight`. Every failure in §2's
+"looks like success" category is a property of a machine, a DNS record or a
+disk, not of the code, so no test suite can reach them. This runs against the
+real deployment.
+
+- **No credential needed:** API up, https, a stranger origin refused, the
+  dashboard allowed *with credentials*, rate limiting live, no sign-in token
+  in a reply, and — by probing repeatedly and collecting machine ids —
+  exactly one gitd answering.
+- **Behind `OPERATOR_TOKEN`:** NODE_ENV, the gitd password not being the
+  published example, an origin configured, mail configured and its sending
+  domain related to the site, migrations applied, signing keys encrypted on
+  the volume, and the newest backup opening and verifying.
+- The operator surface reports **booleans and reasons, never values**, carries
+  its own credential rather than riding on an author's session, and is off
+  (not open) when unset.
+- Two answers are marked "go and look" rather than passed: whether the email
+  arrived, and whether backups exist anywhere but that disk. A checker that
+  guessed would be the green light this exists to distrust.
+
+**It found a bug that had broken every backup in the container.**
+`git bundle verify` resolves a bundle against a repository in scope, so
+without `--git-dir` it depends on the working directory. The suite runs from
+inside the GitLit checkout and passed; the container runs from `/app` and
+backed up nothing, reporting each repository as failed into a log nobody read.
+The regression test now leaves the repository before bundling, reproducing the
+container rather than the developer's machine.
+
+It also found a false alarm in its own first draft — reporting "some keys are
+unencrypted" on a fresh deployment with no keys at all. Fixed to count keys
+rather than return a boolean: a checker that cries wolf on every new install
+is one nobody reads.
 
 ---
 

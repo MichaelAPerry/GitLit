@@ -175,9 +175,53 @@ That is normal — read the error and change the file.
 
 ---
 
-## Step 7 — Check it actually works
+## Step 7 — Run the checker
 
-Do all six. Each fails in a different way, and several fail *silently*.
+Most of what can go wrong, a command can find for you:
+
+```
+pnpm preflight https://api.gitlit.app \
+  --web https://gitlit.app \
+  --token "$OPERATOR_TOKEN" \
+  --email you@yourdomain.com \
+  --html report.html
+```
+
+It prints a list you can read, writes a page you can keep, and exits non-zero
+if something failed. It changes nothing, except sending one sign-in email to
+the address you give it.
+
+To include the settings, signing-key and backup checks, generate one more
+secret and set it on **both** apps:
+
+```
+fly secrets set -a gitlit-api  OPERATOR_TOKEN="$(openssl rand -base64 32)"
+fly secrets set -a gitlit-gitd OPERATOR_TOKEN="<the same value>"
+```
+
+Without it those checks are skipped, not opened to anyone.
+
+**What it can tell you:** whether the site is reachable over https; whether a
+stranger website is refused; whether your dashboard is allowed to talk to the
+API; whether sign-in is rate limited; whether sign-in tokens are leaking into
+replies; whether exactly one gitd is running; whether the gitd password is
+still the published example; whether mail is configured and sending from a
+domain that relates to your site; whether the database is up to date; whether
+the signing keys on the volume are encrypted; and whether the newest backup
+**actually opens and restores**.
+
+**What it will not pretend to know.** Two answers live outside the machine,
+and it marks them "go and look" rather than passing them:
+
+- whether the sign-in email *arrived* — only your inbox can say
+- whether backups exist anywhere but that one disk — only you can say
+
+A checker that guessed at either would be exactly the kind of green light this
+whole page exists to distrust.
+
+## Step 8 — Check the parts a machine cannot
+
+Do all six by hand. Each fails in a different way, and several fail *silently*.
 
 1. **Visit the site.** It should load over `https://`.
 2. **Ask for a sign-in link with your own email.** It should arrive within a
@@ -202,6 +246,9 @@ Do all six. Each fails in a different way, and several fail *silently*.
 These are the things that are wrong in a way you would not notice.
 
 ### Before you let anyone else in
+
+Run `pnpm preflight` first — it covers most of this list automatically. These
+are the ones it cannot check, or that matter enough to confirm by eye.
 
 - [ ] **`SIGNING_MASTER_KEY` is in a password manager.** Not a note, not a
       terminal you will close. Losing it costs the provenance history.
@@ -228,8 +275,10 @@ These are the things that are wrong in a way you would not notice.
 The service looks perfectly healthy while being broken:
 
 1. **gitd running as more than one machine.** Books vanish and reappear
-   depending on which one answers. Check `fly status -a gitlit-gitd` — it must
-   show exactly one. Never run `fly scale count` above 1 on gitd.
+   depending on which one answers. `pnpm preflight` catches this by asking
+   repeatedly and noticing two different machines reply; `fly status -a
+   gitlit-gitd` must also show exactly one. Never run `fly scale count` above
+   1 on gitd.
 2. **Email sending domain unverified.** The site accepts sign-ups and says "a
    link is on its way" while Resend rejects every one. GitLit refuses to start
    without a mail key for exactly this reason, but it cannot tell whether your
@@ -237,9 +286,9 @@ The service looks perfectly healthy while being broken:
 3. **Backups never actually copied off the machine.** GitLit bundles every
    repository on a schedule, but writes them to the same disk the books are
    on. One disk failure takes both. Copy them elsewhere (`aws s3 sync`,
-   rclone, anything), then **restore one** to a scratch folder and confirm the
-   text is really there. A backup you have never restored is a belief, not a
-   backup.
+   rclone, anything). `pnpm preflight` opens and verifies the newest backup
+   every time it runs, so "a backup you have never restored" is handled — but
+   it cannot see whether a copy exists anywhere else, and says so.
 
 ### What is deliberately *not* protected
 
