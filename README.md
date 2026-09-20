@@ -21,7 +21,7 @@ Phases 0–2 of the build order (§15).
 | `packages/mail` | Sign-in email, Resend transport, the production guard | 24 tests |
 | `packages/observability` | Error monitoring, and what may never leave the process | 51 tests |
 | `apps/gitd` | The commit path, backups, offline verification (§5, §7.4) | 82 tests |
-| `apps/api` | REST surface (§12), authorization enforcement, rate limits | 65 tests |
+| `apps/api` | REST surface (§12), authorization enforcement, rate limits | 72 tests |
 | `apps/web` | Dashboard, GitLit Write, Provenance Diff Viewer | 79 tests + 4 in-browser |
 | `apps/mcp` | MCP server — how the AI Researcher executes (§8) | 73 tests |
 
@@ -53,7 +53,7 @@ Then open http://localhost:3000.
 ## Checks
 
 ```bash
-pnpm test        # 661 tests
+pnpm test        # 668 tests
 pnpm typecheck
 pnpm --filter @gitlit/web test:e2e   # 4 real-browser tests
 ```
@@ -233,6 +233,20 @@ why. So the emailed URL lands on `/signin`, which renders and takes the token
 out of the address bar; the click is what posts it. One extra tap, and the link
 survives being prefetched.
 
+**The browser origin is an allowlist, and credentials are allowed.** These are
+one decision, not two. The web app sends every request with
+`credentials: "include"`, so the API must answer
+`Access-Control-Allow-Credentials: true` or the browser discards the response
+and the dashboard never loads. But once credentials are allowed, reflecting
+whatever `Origin` asked becomes an account-takeover primitive: any page an
+author visits could call the API as them and read their manuscripts. So
+production allows `PUBLIC_WEB_URL` (plus `EXTRA_CORS_ORIGINS`) and nothing
+else, and the API refuses to start with neither set. Getting one of these
+right and not the other is worse than getting both wrong — which is how it
+was: credentials were off and every origin was reflected, so the dashboard
+could not load at all. Caught by driving a real browser at the API; no amount
+of `curl` shows it.
+
 **Mail is a startup requirement, not a per-request one.** The API refuses to
 start in production without `RESEND_API_KEY` and a `MAIL_FROM` on a verified
 domain. Without that guard the server looks healthy, accepts sign-ups, answers
@@ -355,6 +369,10 @@ build stages are shared and the images cannot drift apart.
 ```bash
 docker compose up --build     # the whole stack, locally
 ```
+
+**Deploying it for real is [`DEPLOY.md`](./DEPLOY.md)** — written for a
+non-engineer, covering the domain, mail verification, secrets, what to check
+afterwards, and the three failures that look like success.
 
 That is also the cheapest pre-flight: if compose comes up green from empty
 volumes, the images and the release order are right.

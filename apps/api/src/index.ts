@@ -16,6 +16,7 @@ import {
 import { ALL_SCOPES, MAGIC_LINK_TTL_MS, OAuthError, authorize, type Scope } from "@gitlit/auth";
 import { createMailer } from "@gitlit/mail";
 import { repos, type RepoRecord } from "./repos.js";
+import { allowedOrigins, originDecision } from "./cors.js";
 import {
   ADDRESS_WINDOW_MS, addressLimiter, limitedResponse, overAuthLimit, registerRateLimit,
 } from "./rate-limit.js";
@@ -56,7 +57,20 @@ export const app = Fastify({
   logger: process.env.NODE_ENV !== "test",
   trustProxy: TRUST_PROXY,
 });
-await app.register(cors, { origin: true });
+const allowOrigin = originDecision();
+await app.register(cors, {
+  origin: (origin, cb) => cb(null, allowOrigin(origin)),
+  // Required, or the browser throws away every response to the web app's
+  // requests — it sends them all with credentials: "include".
+  credentials: true,
+});
+
+if (process.env.NODE_ENV === "production" && allowedOrigins().length === 0) {
+  throw new Error(
+    "PUBLIC_WEB_URL must be set in production — it is the only origin allowed to " +
+      "call this API from a browser, and with it unset the dashboard cannot load.",
+  );
+}
 await registerRateLimit(app);
 
 // Everything below needs a database; fail at startup rather than per request.

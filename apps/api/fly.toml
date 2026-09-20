@@ -27,6 +27,8 @@ primary_region = "iad"
   API_PORT = "4000"
   GITD_URL = "http://gitlit-gitd.internal:4001"
   PUBLIC_API_URL = "https://api.gitlit.app"
+  # Also the ONLY browser origin allowed to call this API as a signed-in
+  # author. See DEPLOY.md step 5.
   PUBLIC_WEB_URL = "https://gitlit.app"
 
 # Set with `fly secrets set`, never here:
