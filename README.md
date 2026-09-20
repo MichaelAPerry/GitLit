@@ -18,9 +18,10 @@ Phases 0–2 of the build order (§15).
 | `packages/provenance` | Spans, trailers, signed receipt chain (§7) | 28 tests |
 | `packages/auth` | Credentials, roles, OAuth, the authorization decision | 136 tests |
 | `packages/db` | Drizzle schema for §11, migrations, PGlite test harness | 13 tests |
+| `packages/mail` | Sign-in email, Resend transport, the production guard | 24 tests |
 | `apps/gitd` | The commit path, backups, offline verification (§5, §7.4) | 75 tests |
-| `apps/api` | REST surface (§12), authorization enforcement | 43 tests |
-| `apps/web` | Dashboard, GitLit Write, Provenance Diff Viewer | 73 tests + 4 in-browser |
+| `apps/api` | REST surface (§12), authorization enforcement | 50 tests |
+| `apps/web` | Dashboard, GitLit Write, Provenance Diff Viewer | 79 tests + 4 in-browser |
 | `apps/mcp` | MCP server — how the AI Researcher executes (§8) | 73 tests |
 
 ## Two properties worth knowing before reading the code
@@ -51,7 +52,7 @@ Then open http://localhost:3000.
 ## Checks
 
 ```bash
-pnpm test        # 548 tests
+pnpm test        # 585 tests
 pnpm typecheck
 pnpm --filter @gitlit/web test:e2e   # 4 real-browser tests
 ```
@@ -221,8 +222,29 @@ editor is doing something entirely legitimate.
 
 Passwordless, and backed by Postgres. Sign-in is a single-use emailed link, so there is no password to
 leak, reuse, or hash badly — and nothing for an author to lose along with access
-to their manuscript. In development the link is returned in the response rather
-than emailed.
+to their manuscript.
+
+**The link renders on GET and signs you in on POST.** Corporate mail gateways
+and link-preview bots fetch every URL in an inbound message before the reader
+ever sees it. A magic link that signs you in on GET is spent by the scanner,
+and the author is told their link is invalid — every time, with no way to tell
+why. So the emailed URL lands on `/signin`, which renders and takes the token
+out of the address bar; the click is what posts it. One extra tap, and the link
+survives being prefetched.
+
+**Mail is a startup requirement, not a per-request one.** The API refuses to
+start in production without `RESEND_API_KEY` and a `MAIL_FROM` on a verified
+domain. Without that guard the server looks healthy, accepts sign-ups, answers
+"a link is on its way", and sends nothing — and the only person who finds out
+is the author who cannot get in. In development, with no key set, the message
+is printed in full to the API log, so a developer with no mail provider can
+still complete a real sign-in by reading the link out of their terminal.
+
+If a send fails, the API returns 502 and says so rather than claiming a link
+was sent. That leaks nothing: whether Resend is reachable does not depend on
+who asked, so the failure says nothing about whether the address has an
+account — and an author told plainly that sending failed will try again, where
+one told "a link is on its way" waits for a message that is never coming.
 
 GitHub and Google sign-in are available when configured; an unconfigured
 provider is simply absent from the page rather than a button that fails.
@@ -330,8 +352,9 @@ These are staging, not surprises. What is *not* on this list is real and tested.
 
 | Gap | Consequence today | Blocks |
 |---|---|---|
-| **Git smart HTTP not implemented** (§12.7). | `git clone` of a GitLit repo does not work over the network yet, though the repos on disk are ordinary bare Git repos. | The "clone it and verify offline" promise. |
-| **No OAuth on the MCP HTTP transport.** | Any bearer token maps to the demo user. | Multi-user MCP. |
+| **No deploy config.** No Dockerfiles, no `fly.toml`, no volume for `gitd`. | It runs locally and nowhere else. | Anyone but you using it. |
+| **No rate limiting, no error monitoring.** | `/v1/auth/*` will take as many requests as a script can send, and a crash in production is invisible. | Leaving it exposed. |
+| **MCP auth is a GitLit API token, not §12.8's OAuth 2.1 flow.** | Per-user and enforced, but an author pastes a token rather than clicking through a consent screen. | A one-click connector. |
 | **Composer is a `<textarea>`**, not TipTap. | No rich text. The input provenance model is real and wired. | Editing comfort. |
 
 Signing keys are **not** on this list any more: they persist per repo, survive
@@ -341,17 +364,14 @@ receipt chain.
 
 ## What is deliberately absent
 
-- **Local embeddings.** Novelty scoring is lexical today. The `Embedder`
-  interface and the pinned-model slot exist (`src/novelty.ts`); the bge-small
-  ONNX weights are Phase 5. Until then the tool says its scores are lexical
-  rather than implying semantic comparison.
-- **OAuth.** The HTTP transport takes a bearer token placeholder; §12.8's
-  OAuth 2.1 flow maps it to a user. The tool layer is already user-scoped, so
-  that swap does not reach the tools.
-- **Postgres wiring.** The schema is written and typechecks; the API still uses an
-  in-memory index. Because Postgres is only an index over Git (§2.3), swapping it
-  in changes no provenance behaviour.
-- **Smart HTTP / SSH transport** (§12.7), so `git clone` of a GitLit repo is not
-  live yet, though the repositories on disk are ordinary bare Git repos.
+- **SSH transport** (§12.7). Smart HTTP is live and `git clone`/`git push` work
+  over it; SSH is not wired.
+- **OAuth 2.1 for MCP** (§12.8), with dynamic client registration and a consent
+  screen. The transport authenticates and authorizes per user today — see
+  "Connecting from Claude" — but by API token rather than that flow.
 - **TipTap.** The composer is an instrumented `<textarea>`; the input provenance
   model is real, the rich-text layer is Phase 2.5.
+- **Publisher verification links** (§12.6) and the public gallery (§16.3),
+  which are Phases 7–8 and the reason the trust layer exists at all.
+- **Import/export.** `.docx` in, `.docx`/`.epub` out. Imported manuscripts are
+  labelled `imported` (§16 decision 4) and the plumbing for the label exists.

@@ -26,9 +26,31 @@ function SignIn() {
   const [sent, setSent] = useState(false);
   const [devToken, setDevToken] = useState<string | null>(null);
   const [token, setToken] = useState("");
+  const [fromLink, setFromLink] = useState(false);
   const [error, setError] = useState<string | null>(search.get("error"));
   const [busy, setBusy] = useState(false);
   const [providers, setProviders] = useState<Provider[]>([]);
+
+  /**
+   * Arriving from the emailed link. The token is in the URL, but landing here
+   * does NOT sign you in — it takes a click, which posts it.
+   *
+   * That is deliberate. Corporate mail gateways and link-preview bots fetch
+   * every URL in an inbound message before the reader sees it. A link that
+   * signs you in on GET is spent by the scanner, and the author is told their
+   * link is invalid with no way to tell why. Rendering on GET and consuming on
+   * POST makes the link safe to prefetch.
+   */
+  useEffect(() => {
+    const handed = search.get("token");
+    if (!handed) return;
+    setToken(handed);
+    setFromLink(true);
+    setSent(true);
+    // Take it out of the address bar, the history entry, and any Referer
+    // header a later navigation would carry.
+    window.history.replaceState(null, "", "/signin");
+  }, [search]);
 
   // A session handed back by a provider callback arrives in the URL.
   useEffect(() => {
@@ -55,7 +77,14 @@ function SignIn() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ email }),
       });
-      const data = (await res.json()) as { devToken?: string };
+      const data = (await res.json()) as { devToken?: string; detail?: string };
+      if (!res.ok) {
+        // The API distinguishes "we could not send" from "that address has no
+        // account" — only the first is reportable, and it is the one an author
+        // can act on by trying again.
+        setError(data.detail ?? "Could not send the email. Please try again.");
+        return;
+      }
       setSent(true);
       if (data.devToken) { setDevToken(data.devToken); setToken(data.devToken); }
     } catch {
@@ -126,13 +155,24 @@ function SignIn() {
       ) : (
         <form onSubmit={consume}>
           <div className="notice">
-            {devToken
-              ? "Development mode: the link is shown below instead of being emailed."
-              : `If ${email} can sign in, a link is on its way. It expires in 15 minutes and works once.`}
+            {fromLink
+              ? "One more tap and you're in."
+              : devToken
+                ? "Development mode: the link is shown below instead of being emailed."
+                : `If ${email} can sign in, a link is on its way. It expires in 15 minutes and works once.`}
           </div>
-          <label htmlFor="token">Sign-in token</label>
-          <input id="token" value={token} onChange={(e) => setToken(e.target.value)}
-                 style={{ fontFamily: "var(--mono)", fontSize: "0.8rem" }} />
+          {fromLink ? (
+            <p className="meta" style={{ marginTop: 12 }}>
+              Your link checked out. Confirming it here is what actually signs you in — so
+              a mail scanner that opened the link first cannot use it up.
+            </p>
+          ) : (
+            <>
+              <label htmlFor="token">Sign-in token</label>
+              <input id="token" value={token} onChange={(e) => setToken(e.target.value)}
+                     style={{ fontFamily: "var(--mono)", fontSize: "0.8rem" }} />
+            </>
+          )}
           <p style={{ marginTop: 18 }}>
             <button className="btn" disabled={busy || !token}>{busy ? "Signing in…" : "Sign in"}</button>
           </p>

@@ -15,6 +15,7 @@
     "@gitlit/core": "workspace:*",
     "@gitlit/db": "workspace:*",
     "@gitlit/diff": "workspace:*",
+    "@gitlit/mail": "workspace:*",
     "@gitlit/prose": "workspace:*",
     "@gitlit/provenance": "workspace:*",
     "fastify": "^5.2.0",

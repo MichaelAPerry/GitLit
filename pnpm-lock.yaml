@@ -41,6 +41,9 @@ importers:
       '@gitlit/diff':
         specifier: workspace:*
         version: link:../../packages/diff
+      '@gitlit/mail':
+        specifier: workspace:*
+        version: link:../../packages/mail
       '@gitlit/prose':
         specifier: workspace:*
         version: link:../../packages/prose
@@ -226,6 +229,8 @@ importers:
       onnxruntime-web:
         specifier: ^1.23.0
         version: 1.30.0
+
+  packages/mail: {}
 
   packages/prose:
     dependencies:

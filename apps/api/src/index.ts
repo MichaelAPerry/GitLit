@@ -13,7 +13,8 @@ import {
   auth, clearSessionCookie, oauth, requireAccess, requireUser, resolvePrincipal,
   setSessionCookie, PUBLIC_URL, WEB_URL,
 } from "./auth-plugin.js";
-import { ALL_SCOPES, OAuthError, authorize, type Scope } from "@gitlit/auth";
+import { ALL_SCOPES, MAGIC_LINK_TTL_MS, OAuthError, authorize, type Scope } from "@gitlit/auth";
+import { createMailer } from "@gitlit/mail";
 import { repos, type RepoRecord } from "./repos.js";
 import { authoringSessions, evidenceFor } from "./sessions.js";
 
@@ -22,6 +23,11 @@ await app.register(cors, { origin: true });
 
 // Everything below needs a database; fail at startup rather than per request.
 await initDb();
+
+// Same reasoning for mail. A server that starts without a way to send sign-in
+// links is a server nobody new can sign in to, and it looks perfectly healthy
+// while being so (§2.2 of NEXT.md — this was the blocker).
+export const mailer = createMailer();
 
 app.setErrorHandler((err, _req, reply) => {
   if (err instanceof GitLitError) return reply.status(err.status).send(err.toProblem());
@@ -61,8 +67,29 @@ app.get("/health", async () => ({ ok: true, service: "api" }));
 app.post("/v1/auth/magic-link", async (req) => {
   const body = z.object({ email: z.string().email() }).parse(req.body);
   const { token } = await auth.issueMagicLink(body.email);
+
+  try {
+    const result = await mailer.sendMagicLink(body.email, token, MAGIC_LINK_TTL_MS / 60_000);
+    // Never the address and never the token: this line ends up in a log
+    // aggregator, and a sign-in link in a log is a sign-in link anyone with
+    // log access can use.
+    app.log.info({ via: result.via, providerId: result.id }, "magic link sent");
+  } catch (err) {
+    app.log.error({ err }, "magic link could not be sent");
+    /**
+     * Reporting this is safe. Whether the mail provider is reachable does not
+     * depend on who asked, so the failure says nothing about whether the
+     * address has an account — and an author who is told plainly that sending
+     * failed will try again, where one told "a link is on its way" waits for
+     * a message that is never coming.
+     */
+    throw new GitLitError(
+      "mail-unavailable", 502, "Could not send the email",
+      "We could not send the sign-in email just now. Please try again in a moment.",
+    );
+  }
+
   const devToken = process.env.NODE_ENV === "production" ? undefined : token;
-  app.log.info({ email: body.email }, "magic link issued");
   return {
     sent: true,
     // Same response whether or not the address is known, so this endpoint

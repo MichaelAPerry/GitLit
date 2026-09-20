@@ -10,7 +10,7 @@ How to run it and what each package does: [`README.md`](./README.md).
 
 ## 1. State
 
-548 tests across 11 packages. `pnpm typecheck` clean across 18 tasks.
+585 tests across 12 packages. `pnpm typecheck` clean across 20 tasks.
 
 The product works end to end and has been driven against live services, not
 just asserted in tests:
@@ -26,7 +26,9 @@ just asserted in tests:
 - The MCP server runs the full research flow with a real client.
 - Semantic novelty scoring runs on a pinned, bit-reproducible local model.
 
-**The product works. The operations do not exist.** That is the whole gap.
+**The product works. The operations are half built.** Backups, email sign-in
+and per-user MCP auth are done; deploy config and rate limits are not. What is
+left is §2.4 and §2.5.
 
 ---
 
@@ -54,20 +56,41 @@ now live at `.gitlit/keys/<id>.pub` inside the history.
 Still worth doing: copy `BACKUP_DIR` offsite (`aws s3 sync`, rclone) — the
 store is a directory precisely so that stays the operator's choice.
 
-### 2.2 Nobody can sign in
+### 2.2 Email sign-in — **DONE**
 
-Magic links are only ever returned in the dev response
-(`apps/api/src/index.ts`, `/v1/auth/magic-link` → `devToken`). No email is
-sent anywhere in the codebase. In production `devToken` is undefined and the
-flow dead-ends.
+New `packages/mail`: the sign-in email, a Resend transport over its REST API,
+a console transport for development, and the factory that picks between them.
 
-- Add Resend + a React Email template (§4 names both).
-- OAuth is a working alternative *if* GitHub/Google apps are registered and
-  `PUBLIC_API_URL` matches the callback — but email sign-up must work too.
-- **Done means:** a real address receives a link and completes sign-in with
-  `NODE_ENV=production`.
+- The API **refuses to start in production** without `RESEND_API_KEY` and a
+  `MAIL_FROM`. That guard is the point: a server that starts without a mail
+  provider looks healthy, accepts sign-ups, answers "a link is on its way",
+  and sends nothing — and the only person who finds out is the author who
+  cannot get in.
+- The emailed link lands on `/signin` (a GET that renders) and is consumed by
+  a POST on click. Mail gateways prefetch every URL in an inbound message; a
+  link that signs you in on GET is spent by the scanner before the author sees
+  it. The page also strips the token out of the address bar on arrival.
+- A failed send returns 502 and says so. This leaks nothing — provider
+  reachability does not depend on who asked — and an author told plainly will
+  retry, where one told "a link is on its way" waits for nothing.
+- Departs from §4 on **React Email**: an email client is not a browser, the
+  output has to be a table of inline styles whatever renders it, so the two
+  templates are two functions rather than a React renderer in the API. The
+  reasoning is in `packages/mail/src/layout.ts`. Revisit at a dozen templates.
 
-### 2.3 The MCP HTTP transport is wide open — **DONE**
+**Rehearsed, not just asserted.** `ResendTransport` was driven over real HTTP
+against a server speaking Resend's protocol (bearer header, `to` as an array,
+`reply_to`, tags, both body parts all confirmed on the wire), and a live API
+against real Postgres completed a full sign-in from the link as printed:
+link → session → `/v1/me` → replay rejected 401. The send log line carries
+neither the address nor the token.
+
+**Still the operator's job:** verify the sending domain at Resend and set SPF,
+DKIM and DMARC. Unverified domain means every send is rejected 403 — which
+the transport surfaces verbatim rather than retrying, since it fails the same
+way twice.
+
+### 2.3 The MCP HTTP transport — **DONE**
 
 The hole was wider than the placeholder that flagged it. `gitlit-client.ts`
 read one `GITLIT_API_TOKEN` from the environment for *every* downstream call,
@@ -121,7 +144,7 @@ amount that can be lost.
 
 1. Backups + a rehearsed restore (§2.1)
 2. ~~MCP HTTP auth (§2.3) — smallest fix, removes a live hole~~ **DONE**
-3. Email sending (§2.2)
+3. ~~Email sending (§2.2)~~ **DONE**
 4. Deploy config (§2.4)
 5. Rate limits + Sentry (§2.5)
 
