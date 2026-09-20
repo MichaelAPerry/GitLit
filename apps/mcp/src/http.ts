@@ -5,6 +5,7 @@ import { buildMcpServer } from "./server.js";
 import { SessionStore } from "./session.js";
 import { Ledger } from "./ledger.js";
 import { createGitlitClient, identify, type TokenIdentity } from "./gitlit-client.js";
+import { initMonitoring, reportError } from "@gitlit/observability";
 
 /**
  * Streamable HTTP transport — the DEFAULT on-ramp (§8.5).
@@ -22,6 +23,9 @@ import { createGitlitClient, identify, type TokenIdentity } from "./gitlit-clien
  * Tokens are resolved against the API and cached briefly — an MCP session is
  * many requests, and revocation still takes effect within the TTL.
  */
+/** Off without SENTRY_DSN. Everything sent is scrubbed first (§2.5). */
+const monitoringOn = initMonitoring({ service: "mcp" });
+
 const app = express();
 app.use(express.json({ limit: "4mb" }));
 
@@ -63,9 +67,31 @@ function unauthorized(res: express.Response, detail: string) {
     .json({ title: "Unauthorized", status: 401, detail });
 }
 
-app.get("/health", (_req, res) => { res.json({ ok: true, service: "mcp" }); });
+app.get("/health", (_req, res) => { res.json({ ok: true, service: "mcp", monitoring: monitoringOn }); });
 
-app.post("/mcp", async (req, res) => {
+/**
+ * Express 4 does not catch a rejected promise from an async handler, so an
+ * unhandled rejection escapes to the process — and the runtime image sets
+ * --unhandled-rejections=strict, which turns that into an exit. One bad
+ * request would take the whole MCP server down with it.
+ */
+type Handler = (req: express.Request, res: express.Response) => Promise<void>;
+const guard = (handler: Handler): Handler => async (req, res) => {
+  try {
+    await handler(req, res);
+  } catch (err) {
+    reportError(err, { route: req.path, method: req.method });
+    // The session id is deliberately absent from what the client is told: it
+    // is a capability, and echoing it into an error body puts it in logs.
+    if (!res.headersSent) {
+      res.status(500).json({ title: "Internal error", status: 500 });
+    } else {
+      res.end();
+    }
+  }
+};
+
+app.post("/mcp", guard(async (req, res) => {
   const token = bearerFrom(req);
   if (!token) {
     unauthorized(res, "Connect GitLit from Claude, or present a GitLit API token.");
@@ -132,11 +158,11 @@ app.post("/mcp", async (req, res) => {
   }
 
   await transport.handleRequest(req, res, req.body);
-});
+}));
 
 // GET opens the server-to-client SSE stream; DELETE ends the session.
 for (const method of ["get", "delete"] as const) {
-  app[method]("/mcp", async (req, res) => {
+  app[method]("/mcp", guard(async (req, res) => {
     const token = bearerFrom(req);
     const identity = token ? await authenticate(token) : null;
     if (!identity) {
@@ -150,7 +176,7 @@ for (const method of ["get", "delete"] as const) {
       return;
     }
     await transport.handleRequest(req, res);
-  });
+  }));
 }
 
 const port = Number(process.env.MCP_PORT ?? 4002);

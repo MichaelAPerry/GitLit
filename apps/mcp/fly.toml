@@ -17,6 +17,8 @@ primary_region = "iad"
   MCP_PORT = "4002"
   GITLIT_API_URL = "http://gitlit-api.internal:4000"
 
+# Set with `fly secrets set`: SENTRY_DSN (optional).
+
 [http_service]
   internal_port = 4002
   force_https = true

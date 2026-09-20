@@ -31,7 +31,9 @@ primary_region = "iad"
 
 # Set with `fly secrets set`:
 #   GITD_SERVICE_TOKEN — without it anyone reaching gitd commits as anyone
-#   SIGNING_MASTER_KEY — wraps per-repo Ed25519 private keys at rest
+#   SIGNING_MASTER_KEY — required; without it the keys that make receipts
+#                        verifiable sit unencrypted on the volume
+#   SENTRY_DSN         — optional error monitoring
 
 [mounts]
   source = "gitlit_repos"

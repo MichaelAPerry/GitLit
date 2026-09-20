@@ -2,12 +2,16 @@ import Fastify from "fastify";
 import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { GitLitError } from "@gitlit/core";
+import { initMonitoring, reportError } from "@gitlit/observability";
 import { initRepo, readFileAt, repoPath, log, resolveHead, listTree } from "./repo.js";
 import { writeCommit } from "./commit-path.js";
 import { KeyStore } from "./keystore.js";
 import { isGitRoute, registerSmartHttp } from "./git-routes.js";
 
 const REPO_ROOT = process.env.REPO_ROOT ?? "./repos";
+
+/** Off without SENTRY_DSN. Everything sent is scrubbed first (§2.5). */
+const monitoringOn = initMonitoring({ service: "gitd" });
 
 /**
  * gitd is the only process that touches the repository volume (§5). Keeping
@@ -58,10 +62,16 @@ export function buildServer() {
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof GitLitError) return reply.status(err.status).send(err.toProblem());
     app.log.error(err);
+    /**
+     * The route, not the URL: a Git request path carries the owner and slug
+     * of a private manuscript, and a repository's existence is itself the
+     * thing authorization is protecting.
+     */
+    reportError(err, { route: _req.routeOptions?.url, method: _req.method });
     return reply.status(500).send({ title: "Internal error", status: 500 });
   });
 
-  app.get("/health", async () => ({ ok: true, service: "gitd" }));
+  app.get("/health", async () => ({ ok: true, service: "gitd", monitoring: monitoringOn }));
 
   registerSmartHttp(app, REPO_ROOT);
 

@@ -20,7 +20,8 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "express": "^4.21.2",
     "zod": "^3.24.1",
-    "@gitlit/embed": "workspace:*"
+    "@gitlit/embed": "workspace:*",
+    "@gitlit/observability": "workspace:*"
   },
   "devDependencies": {
     "@types/express": "^5.0.0"

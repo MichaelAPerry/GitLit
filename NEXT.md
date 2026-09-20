@@ -10,7 +10,7 @@ How to run it and what each package does: [`README.md`](./README.md).
 
 ## 1. State
 
-594 tests across 12 packages. `pnpm typecheck` clean across 20 tasks.
+661 tests across 13 packages. `pnpm typecheck` clean across 22 tasks.
 
 The product works end to end and has been driven against live services, not
 just asserted in tests:
@@ -26,9 +26,9 @@ just asserted in tests:
 - The MCP server runs the full research flow with a real client.
 - Semantic novelty scoring runs on a pinned, bit-reproducible local model.
 
-**The product works, and it deploys.** Backups, email sign-in, per-user MCP
-auth and deploy config are done. What is left is §2.5: rate limiting and error
-monitoring.
+**The product works, it deploys, and the operations exist.** Every blocker in
+§2 is closed. What is left is not operational work but product work — §15's
+phases 7–8, below.
 
 ---
 
@@ -161,36 +161,92 @@ names, regions and volume sizes are a starting point, not a tested
 configuration. Postgres is assumed attached (`fly postgres create`), not
 deployed by these files.
 
-### 2.5 Lower, but real
+### 2.5 Rate limiting, monitoring, key encryption — **DONE**
 
-- No rate limiting on any endpoint. `@fastify/rate-limit` on `/v1/auth/*`
-  and the research endpoints at minimum.
-- No error monitoring. §4 names Sentry.
-- Signing keys sit unencrypted on disk unless `SIGNING_MASTER_KEY` is set.
-  Set it, or the AES-256-GCM wrap in `apps/gitd/src/keystore.ts` never runs.
+**Rate limiting.** Two limits, because they stop different things: per IP (a
+script from one place) and per email address (a botnet asking for sign-in
+links to one victim's inbox — every request from a different host, so the
+per-IP limit never fires and the victim is mail-bombed on GitLit's sending
+reputation). `/health` and `/v1/internal/git-access` are exempt: the first is
+polled by the platform, and the second is called once per Git transport
+request from one internal address, so limiting it breaks `git clone` for
+everyone rather than slowing an attacker.
+
+`TRUST_PROXY_HOPS` decides what `req.ip` is, and both wrong answers are bad in
+opposite directions — too low and the whole platform shares one bucket, too
+high and a client forges `X-Forwarded-For` for a fresh bucket per request.
+
+**Monitoring.** New `packages/observability`. Off without `SENTRY_DSN` and
+silent about it; only 5xx is reported, since paging on 4xx trains everyone to
+ignore the alerts that matter. Scrubbing is deny-by-default over the whole
+event — credentials by shape, addresses, auth headers, and any key holding
+prose, a diff or spans; `user`, cookies and the request body are dropped
+outright.
+
+**`SIGNING_MASTER_KEY` is now required in production.** Unset, the Ed25519 key
+that signs every receipt sat in plaintext on the volume — the thing most
+likely to be snapshotted and copied around — while gitd came up and worked
+perfectly.
+
+**Three bugs, all from driving real things rather than asserting.**
+
+1. **The error handler swallowed the limiter's 429 and returned 500.** Every
+   rate-limited request would have reported as a server fault *and* paged the
+   error tracker — the exact noise the 4xx/5xx split exists to prevent. 4xx
+   from any plugin now passes through.
+2. **Sentry ships the deployed SOURCE around every stack frame**
+   (`pre_context` / `context_line` / `post_context`). Text near a throw left
+   the process regardless of what the scrubber knew about, and 35 passing unit
+   tests said otherwise, because they tested the scrubber against events I
+   built by hand. Found by pointing the real SDK at a local ingest server.
+   `ContextLines` is filtered out and local variables are explicitly off — a
+   frame in the commit path has the chapter in scope.
+3. **MCP had no error handling at all.** Express 4 does not catch a rejected
+   promise from an async handler, and the runtime image sets
+   `--unhandled-rejections=strict`, so one bad request would have taken the
+   whole MCP server down.
+
+**Rehearsed against the live stack:** the per-address limit refuses the 4th
+request for one inbox with a `retry-after`, 200 consecutive `/health` polls
+are never limited, and 20 consecutive clones make 80 authorization callbacks
+with none refused.
+
+**Still per machine:** the limiters are in-memory, so N API machines means N
+times the limit. Correct at one machine, wrong the moment the API scales out —
+that needs a shared store (Redis is already in compose).
 
 ---
 
 ## 3. The plan
 
-### Session 1 — make it deployable (~1 day)
+### Session 1 — make it deployable — **COMPLETE**
 
-Order matters: backups first, because everything after it increases the
-amount that can be lost.
-
-1. Backups + a rehearsed restore (§2.1)
-2. ~~MCP HTTP auth (§2.3) — smallest fix, removes a live hole~~ **DONE**
+1. ~~Backups + a rehearsed restore (§2.1)~~ **DONE**
+2. ~~MCP HTTP auth (§2.3)~~ **DONE**
 3. ~~Email sending (§2.2)~~ **DONE**
 4. ~~Deploy config (§2.4)~~ **DONE**
-5. Rate limits + Sentry (§2.5)
+5. ~~Rate limits + Sentry (§2.5)~~ **DONE**
 
-**Then it is genuinely alpha**, and a small private test is reasonable.
+**It is genuinely alpha**, and a small private test is reasonable.
 
-### The two-hour alternative
+### What is left before a first deploy
 
-If the test is you and two friends on throwaway chapters: register
-OAuth apps, deploy without backups, and say plainly that manuscripts may be
-lost. Only acceptable while nothing real is in it.
+None of this is code. It is the part only you can do:
+
+1. Register a domain and point it at Fly.
+2. Verify the sending domain at Resend, and set SPF, DKIM and DMARC.
+   Unverified means every sign-in email is rejected 403.
+3. Register the GitHub and Google OAuth apps, with callbacks matching
+   `PUBLIC_API_URL`.
+4. `fly postgres create`, then `fly secrets set` for `DATABASE_URL`,
+   `GITD_SERVICE_TOKEN`, `SIGNING_MASTER_KEY`, `RESEND_API_KEY`, `MAIL_FROM`
+   and, if you want it, `SENTRY_DSN`.
+5. Deploy gitd first — the others call it — then api, web, mcp.
+6. Copy `BACKUP_DIR` offsite. The backup store is a directory precisely so
+   that stays your choice.
+
+The `fly.toml` files have never been applied, so expect the first deploy to
+need adjusting: app names, regions and volume sizes are a starting point.
 
 ### Session 2 — the parts that make it a product
 

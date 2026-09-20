@@ -23,13 +23,14 @@ primary_region = "iad"
 
 [env]
   NODE_ENV = "production"
+  TRUST_PROXY_HOPS = "1"
   API_PORT = "4000"
   GITD_URL = "http://gitlit-gitd.internal:4001"
   PUBLIC_API_URL = "https://api.gitlit.app"
   PUBLIC_WEB_URL = "https://gitlit.app"
 
 # Set with `fly secrets set`, never here:
-#   DATABASE_URL GITD_SERVICE_TOKEN RESEND_API_KEY MAIL_FROM
+#   DATABASE_URL GITD_SERVICE_TOKEN RESEND_API_KEY MAIL_FROM SENTRY_DSN
 #   GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET
 
 [http_service]

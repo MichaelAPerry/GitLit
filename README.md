@@ -19,8 +19,9 @@ Phases 0–2 of the build order (§15).
 | `packages/auth` | Credentials, roles, OAuth, the authorization decision | 136 tests |
 | `packages/db` | Drizzle schema for §11, migrations, PGlite test harness | 16 tests |
 | `packages/mail` | Sign-in email, Resend transport, the production guard | 24 tests |
-| `apps/gitd` | The commit path, backups, offline verification (§5, §7.4) | 79 tests |
-| `apps/api` | REST surface (§12), authorization enforcement | 52 tests |
+| `packages/observability` | Error monitoring, and what may never leave the process | 51 tests |
+| `apps/gitd` | The commit path, backups, offline verification (§5, §7.4) | 82 tests |
+| `apps/api` | REST surface (§12), authorization enforcement, rate limits | 65 tests |
 | `apps/web` | Dashboard, GitLit Write, Provenance Diff Viewer | 79 tests + 4 in-browser |
 | `apps/mcp` | MCP server — how the AI Researcher executes (§8) | 73 tests |
 
@@ -52,7 +53,7 @@ Then open http://localhost:3000.
 ## Checks
 
 ```bash
-pnpm test        # 594 tests
+pnpm test        # 661 tests
 pnpm typecheck
 pnpm --filter @gitlit/web test:e2e   # 4 real-browser tests
 ```
@@ -396,20 +397,70 @@ would have found; both are described in `NEXT.md` §2.4. What has *not* been
 rehearsed is Fly itself: the `fly.toml` files are unapplied, so treat app
 names, regions and volume sizes as a starting point.
 
+## Rate limiting and error monitoring
+
+**Two limits, because they stop different things.** Per IP, a script hammering
+the API from one place. Per email address, a botnet asking for sign-in links
+to *one victim's inbox* — every request from a different host, so the per-IP
+limit never fires, and the victim is mail-bombed on GitLit's sending
+reputation. The second is the one an IP limit cannot cover, and it is why the
+magic-link route has a limit of its own. The 429 is identical whether or not
+the address has an account, so it stays useless for enumeration.
+
+**Two paths are never limited**, and both would fail quietly if they were.
+`/health` is polled by the platform every few seconds, so limiting it takes
+the service out of rotation. `/v1/internal/git-access` is called by gitd once
+per Git transport request, all from one internal address — a limit there does
+not slow an attacker down, it breaks `git clone` for every author at once. A
+rehearsal ran 20 consecutive clones through the live stack: 80 authorization
+callbacks, none refused.
+
+**`TRUST_PROXY_HOPS` decides what `req.ip` is**, and the limiter is keyed on
+it, so both wrong answers are bad in opposite directions. Too low and every
+request carries the edge proxy's address: one bucket for the whole platform,
+and one busy author limits everyone. Too high (or `true`) and a client puts
+whatever it likes in `X-Forwarded-For` and gets a fresh bucket per request,
+which is no limit at all. Fly puts exactly one proxy in front, hence the
+default of 1; compose puts none, hence 0.
+
+**Monitoring is off without `SENTRY_DSN`, and silent about it** — a stack that
+refuses to run without an error tracker has made the tracker a dependency of
+the product. Only 5xx is reported: a 4xx is a normal outcome, and paging on
+those trains everyone to ignore the alerts that matter.
+
+**What may never leave the process.** An error tracker is a pipe to a third
+party that runs on the unhappy path, where payloads are largest and least
+expected — and here the payloads are manuscripts and sign-in links. So the
+scrubbing is a deny-by-default filter over the whole event rather than a list
+of fields someone remembered: credentials by shape, addresses, auth headers,
+and any key holding prose, a diff or computed spans. The `user` block, cookies
+and the request body are dropped outright rather than scrubbed, because
+neither is worth the risk of one missed pattern.
+
+Two things were found by driving the real SDK at a local ingest endpoint
+rather than by testing the scrubber. Sentry attaches the **deployed source**
+around every stack frame (`pre_context` / `context_line` / `post_context`), so
+text near a throw left the process no matter what the scrubber knew about —
+the fix is not to send it, and `ContextLines` is now filtered out. Local
+variables are explicitly off too: a frame in the commit path has the chapter
+in scope. `packages/observability/src/wire.test.ts` asserts all of this
+against a real endpoint so it stays true.
+
 ## Known gaps — read this before trusting the build
 
 These are staging, not surprises. What is *not* on this list is real and tested.
 
 | Gap | Consequence today | Blocks |
 |---|---|---|
-| **No rate limiting, no error monitoring.** | `/v1/auth/*` will take as many requests as a script can send, and a crash in production is invisible. | Leaving it exposed. |
 | **MCP auth is a GitLit API token, not §12.8's OAuth 2.1 flow.** | Per-user and enforced, but an author pastes a token rather than clicking through a consent screen. | A one-click connector. |
 | **Composer is a `<textarea>`**, not TipTap. | No rich text. The input provenance model is real and wired. | Editing comfort. |
+| **Rate limits are per machine, not shared.** | In-memory counters, so N API machines means N times the limit. Fine at one machine; wrong the moment you scale out. | Scaling the API past one machine. |
+| **Fly itself is unrehearsed.** | The images and compose are verified by building and running them; the `fly.toml` files have never been applied. | Treating app names, regions and volume sizes as tested. |
 
 Signing keys are **not** on this list any more: they persist per repo, survive
-restarts, are wrapped with AES-256-GCM when `SIGNING_MASTER_KEY` is set, and the
-service refuses to start rather than regenerate a key and orphan an existing
-receipt chain.
+restarts, are wrapped with AES-256-GCM, and gitd refuses to start in production
+without `SIGNING_MASTER_KEY` rather than leave them in plaintext on the volume —
+or regenerate a key and orphan an existing receipt chain.
 
 ## What is deliberately absent
 

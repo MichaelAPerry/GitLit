@@ -16,10 +16,48 @@ import {
 import { ALL_SCOPES, MAGIC_LINK_TTL_MS, OAuthError, authorize, type Scope } from "@gitlit/auth";
 import { createMailer } from "@gitlit/mail";
 import { repos, type RepoRecord } from "./repos.js";
+import {
+  ADDRESS_WINDOW_MS, addressLimiter, limitedResponse, overAuthLimit, registerRateLimit,
+} from "./rate-limit.js";
+import { initMonitoring, reportError } from "@gitlit/observability";
 import { authoringSessions, evidenceFor } from "./sessions.js";
 
-export const app = Fastify({ logger: process.env.NODE_ENV !== "test" });
+/**
+ * Off without SENTRY_DSN, and silent about it. A stack that refuses to run
+ * without an error tracker has made the tracker a dependency of the product.
+ */
+const monitoringOn = initMonitoring({ service: "api" });
+
+/**
+ * How many proxies sit in front of this process.
+ *
+ * This decides what `req.ip` is, and the rate limiter is keyed on `req.ip`, so
+ * both wrong answers are bad in opposite directions. Too low and every request
+ * carries the edge proxy's address: one bucket for the entire platform, and
+ * one busy author rate-limits everyone. Too high (or `true`) and a client can
+ * put whatever it likes in X-Forwarded-For and get a fresh bucket per request,
+ * which is no limit at all.
+ *
+ * Fly puts exactly one proxy in front, hence the default. Behind anything else
+ * — Cloudflare in front of Fly, say — set TRUST_PROXY_HOPS to match, and count
+ * the hops rather than guessing.
+ */
+const TRUST_PROXY_HOPS = Math.max(0, Number(process.env.TRUST_PROXY_HOPS ?? 1));
+
+/**
+ * Trust exactly the first N hops of X-Forwarded-For and no more. Anything the
+ * client appended beyond that is ignored, which is what makes the hop count a
+ * limit rather than a suggestion.
+ */
+const TRUST_PROXY: boolean | ((addr: string, hop: number) => boolean) =
+  process.env.NODE_ENV === "production" ? (_addr, hop) => hop < TRUST_PROXY_HOPS : false;
+
+export const app = Fastify({
+  logger: process.env.NODE_ENV !== "test",
+  trustProxy: TRUST_PROXY,
+});
 await app.register(cors, { origin: true });
+await registerRateLimit(app);
 
 // Everything below needs a database; fail at startup rather than per request.
 await initDb();
@@ -52,11 +90,52 @@ app.setErrorHandler((err, _req, reply) => {
       title: "Sign-in failed", status: 400, detail: err.message,
     });
   }
+  /**
+   * Anything that already carries a 4xx status is the client's, not ours —
+   * most visibly the rate limiter, which signals a refusal by erroring with
+   * status 429. Falling through to the generic handler turned every limited
+   * request into a 500 "Internal error" AND paged the error tracker about it,
+   * which is precisely the noise the 4xx/5xx split exists to prevent.
+   */
+  const status = (err as { statusCode?: number }).statusCode;
+  if (typeof status === "number" && status >= 400 && status < 500) {
+    return reply.status(status).send({
+      type: `https://gitlit.app/errors/${status === 429 ? "rate-limited" : "bad-request"}`,
+      title: status === 429 ? "Too many requests" : "Bad request",
+      status,
+      detail: (err as Error).message,
+    });
+  }
+
   app.log.error(err);
+  /**
+   * Only 5xx reaches the error tracker. A 4xx is a normal outcome — a bad
+   * body, an expired link, a repository someone cannot see — and paging on
+   * those trains everyone to ignore the alerts that matter. The route and
+   * method go with it; the URL does not, because a magic-link token arrives
+   * in one.
+   */
+  reportError(err, { route: _req.routeOptions?.url, method: _req.method });
   return reply.status(500).send({ title: "Internal error", status: 500 });
 });
 
 app.addHook("onRequest", async (req) => { req.principal = await resolvePrincipal(req); });
+
+/**
+ * Sign-in and token minting are limited per IP, ahead of any work: each one
+ * either sends mail, mints a credential, or lets a caller guess at one.
+ */
+const AUTH_ROUTES = new Set([
+  "/v1/auth/magic-link", "/v1/auth/session", "/v1/tokens",
+]);
+
+app.addHook("onRequest", async (req, reply) => {
+  if (req.method !== "POST" || !AUTH_ROUTES.has(req.url.split("?")[0] ?? req.url)) return;
+  const retry = overAuthLimit(req);
+  if (retry === null) return;
+  return reply.status(429).header("retry-after", String(retry))
+    .send(limitedResponse(retry, "Too many sign-in attempts from this address."));
+});
 
 async function mustFind(owner: string, slug: string): Promise<RepoRecord> {
   const r = await repos.find(owner, slug);
@@ -71,7 +150,7 @@ async function committer(userId: string) {
   return { name: user.displayName ?? user.handle, email: user.email, id: user.id };
 }
 
-app.get("/health", async () => ({ ok: true, service: "api" }));
+app.get("/health", async () => ({ ok: true, service: "api", monitoring: monitoringOn }));
 
 // ------------------------------------------------------------------- auth
 
@@ -79,8 +158,25 @@ app.get("/health", async () => ({ ok: true, service: "api" }));
  * Passwordless sign-in. In development the token comes back in the response so
  * the flow is usable without a mail server; in production it is only emailed.
  */
-app.post("/v1/auth/magic-link", async (req) => {
+app.post("/v1/auth/magic-link", async (req, reply) => {
   const body = z.object({ email: z.string().email() }).parse(req.body);
+  const address = body.email.trim().toLowerCase();
+
+  /**
+   * Per address, on top of the per-IP limit above. A botnet asking for links
+   * to one victim's inbox clears the per-IP limit trivially — every request
+   * comes from somewhere else — and the victim is mail-bombed on GitLit's
+   * sending reputation. This is the limit that stops that.
+   *
+   * The reply is the same 429 whether or not the address has an account, so
+   * it stays useless for enumeration.
+   */
+  if (!addressLimiter.take(address)) {
+    const retry = addressLimiter.retryAfter(address) || Math.ceil(ADDRESS_WINDOW_MS / 1000);
+    return reply.status(429).header("retry-after", String(retry))
+      .send(limitedResponse(retry, "Too many sign-in links requested for that address."));
+  }
+
   const { token } = await auth.issueMagicLink(body.email);
 
   try {

@@ -22,7 +22,9 @@
     "zod": "^3.24.1",
     "@gitlit/auth": "workspace:*",
     "drizzle-orm": "^0.38.2",
-    "postgres": "^3.4.5"
+    "postgres": "^3.4.5",
+    "@fastify/rate-limit": "^10.2.1",
+    "@gitlit/observability": "workspace:*"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8"

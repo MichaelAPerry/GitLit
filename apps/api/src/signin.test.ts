@@ -9,6 +9,7 @@ vi.mock("./gitd-client.js", () => ({
   },
 }));
 
+const { resetRateLimits } = await import("./rate-limit.js");
 const { app, mailer } = await import("./index.js");
 await app.ready();
 
@@ -21,7 +22,9 @@ function linkFrom(text: string): URL {
   return new URL(match[0]);
 }
 
-beforeEach(() => { outbox.clear(); });
+// Sign-in is rate limited per IP, and `inject` gives every request the same
+// one, so without this a later test in the file is refused rather than run.
+beforeEach(() => { outbox.clear(); resetRateLimits(); });
 
 describe("signing in by email", () => {
   it("actually sends a message to the address that asked", async () => {

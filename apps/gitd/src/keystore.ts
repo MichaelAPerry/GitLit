@@ -24,7 +24,24 @@ interface StoredKey { keyId: string; publicKey: string; privateKey: string; wrap
 
 function masterKey(): Buffer | null {
   const secret = process.env.SIGNING_MASTER_KEY;
-  if (!secret) return null;
+  if (!secret) {
+    /**
+     * Required in production (§2.5).
+     *
+     * Without it the Ed25519 private key that signs every receipt sits in
+     * plaintext on the volume, and the volume is the thing most likely to be
+     * snapshotted, backed up and copied around. Unset, gitd comes up and works
+     * perfectly — which is why this has to be a refusal to start rather than a
+     * warning nobody reads.
+     */
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(
+        "SIGNING_MASTER_KEY must be set in production. Without it the signing keys " +
+          "that make receipts verifiable are stored unencrypted on the repository volume.",
+      );
+    }
+    return null;
+  }
   return scryptSync(secret, "gitlit-signing-key-v1", 32);
 }
 

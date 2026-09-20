@@ -17,10 +17,16 @@ vi.mock("./gitd-client.js", () => ({
   },
 }));
 
+const { resetRateLimits } = await import("./rate-limit.js");
 const { app } = await import("./index.js");
 const { auth } = await import("./auth-plugin.js");
 
 beforeAll(async () => { await app.ready(); });
+
+// Sign-in and token minting are rate limited per IP, and `inject` gives every
+// request the same one. Reset between tests so the limit under test is the
+// one the test is about.
+beforeEach(() => { resetRateLimits(); });
 
 /** Sign a user in the way a real client would: magic link -> session token. */
 async function signIn(email: string): Promise<{ userId: string; session: string; handle: string }> {
