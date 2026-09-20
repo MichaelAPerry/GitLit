@@ -14,9 +14,23 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+
+      # The pinned embedding model is a 34MB artefact, fetched rather than
+      # committed and verified against the hash in packages/embed. Cached so
+      # it is downloaded once rather than on every run; the semantic tests
+      # skip cleanly if it is missing.
+      - uses: actions/cache@v4
+        with:
+          path: .models
+          key: gitlit-embed-bge-small-en-v1.5
+      - run: pnpm --filter @gitlit/embed fetch-model
+        env:
+          GITLIT_MODEL_DIR: ${{ github.workspace }}/.models/bge-small-en-v1.5
       - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm test
+        env:
+          GITLIT_MODEL_DIR: ${{ github.workspace }}/.models/bge-small-en-v1.5
 
       # Real-browser coverage for the one signal jsdom cannot produce:
       # isTrusted on genuine input (§7.5.1).

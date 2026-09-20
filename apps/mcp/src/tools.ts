@@ -6,7 +6,11 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { searchAll, type CorpusName } from "./corpora.js";
 import { Ledger } from "./ledger.js";
 import { fetchSource, toPlainText } from "./fetch-guard.js";
-import { noveltyCaveat, scoreNovelty, SCORER_VERSION } from "./novelty.js";
+import {
+  noveltyCaveat, scoreNovelty, scoreNoveltySemantic,
+  HYBRID_SCORER_VERSION, LEXICAL_SCORER_VERSION,
+} from "./novelty.js";
+import { cosine, loadEmbedder } from "@gitlit/embed";
 import { buildFrontMatter, validateArchitecture } from "./architecture.js";
 import { gitlit } from "./gitlit-client.js";
 import type { AgentSession, SessionStore } from "./session.js";
@@ -162,12 +166,41 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         authors: r.authors ?? [], publishedYear: r.publishedYear, synopsis: r.excerpt,
         url: r.url,
       }));
-      const scores = scoreNovelty(premise, works);
+
+      /**
+       * Use the pinned local model when it is installed, and say so either
+       * way. Silently falling back to word overlap while reporting the same
+       * shape of result would let a weaker answer pass for a stronger one.
+       */
+      let embedder = null;
+      let embedderError: string | undefined;
+      try {
+        embedder = await loadEmbedder();
+      } catch (err) {
+        embedderError = err instanceof Error ? err.message : String(err);
+      }
+
+      const scores = embedder
+        ? await scoreNoveltySemantic(premise, works, embedder, cosine)
+        : scoreNovelty(premise, works);
+
+      // Remember how this was scored, so the committed architecture states it.
+      session.noveltyScorer = scores.scorerVersion;
+
       return json({
         ...scores,
         comparedAgainst: rows.length,
-        caveat: "Scores are lexical and deterministic. They measure textual overlap with the " +
-                "blurbs we retrieved, not literary similarity, and low overlap is not originality.",
+        method: embedder ? "lexical + semantic" : "lexical only",
+        caveat: embedder
+          ? "Scores blend word overlap with meaning, computed by a pinned local model. " +
+            "Both halves reproduce offline from a clone. They measure how closely a premise " +
+            "resembles the blurbs we retrieved — not literary quality, and low similarity is " +
+            "not originality."
+          : "Scores are LEXICAL ONLY: the semantic model is not installed, so a premise " +
+            "rewritten in different words will not be recognised as similar. Run " +
+            "'pnpm --filter @gitlit/embed fetch-model' to enable it. Low overlap is not " +
+            "originality either way.",
+        ...(embedderError ? { embedderError } : {}),
       });
     });
   });
@@ -317,7 +350,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
         clientName: session.clientName,
         premiseHash: `sha256:${createHash("sha256").update(premise ?? "").digest("hex").slice(0, 16)}`,
         verdict: session.noveltyVerdict,
-        scorerVersion: SCORER_VERSION,
+        scorerVersion: session.noveltyScorer ?? LEXICAL_SCORER_VERSION,
       });
 
       const body = markdown.replace(/^---\n[\s\S]*?\n---\n*/, "");

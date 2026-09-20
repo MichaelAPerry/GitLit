@@ -14,13 +14,14 @@ Phases 0–2 of the build order (§15).
 | `packages/core` | Domain types, ULIDs, path allowlist (§8.3) | via consumers |
 | `packages/prose` | Prose normalizer — one sentence per line (§2.2) | 21 tests |
 | `packages/diff` | Sentence diff, move detection, plan-to-prose derivation (§9) | 45 tests |
+| `packages/embed` | Pinned local embedding model (§2.7) | 24 tests |
 | `packages/provenance` | Spans, trailers, signed receipt chain (§7) | 28 tests |
 | `packages/auth` | Credentials, roles, OAuth, the authorization decision | 136 tests |
 | `packages/db` | Drizzle schema for §11, migrations, PGlite test harness | 13 tests |
 | `apps/gitd` | The commit path — the only writer of provenance (§5) | 16 tests |
 | `apps/api` | REST surface (§12), authorization enforcement | 43 tests |
 | `apps/web` | Dashboard, GitLit Write, Provenance Diff Viewer | 73 tests + 4 in-browser |
-| `apps/mcp` | MCP server — how the AI Researcher executes (§8) | 55 tests |
+| `apps/mcp` | MCP server — how the AI Researcher executes (§8) | 63 tests |
 
 ## Two properties worth knowing before reading the code
 
@@ -50,7 +51,7 @@ Then open http://localhost:3000.
 ## Checks
 
 ```bash
-pnpm test        # 483 tests
+pnpm test        # 515 tests
 pnpm typecheck
 pnpm --filter @gitlit/web test:e2e   # 4 real-browser tests
 ```
@@ -81,10 +82,37 @@ Two things the database is **not**:
   source of truth — losing them loses real state rather than something a
   reindex could reconstruct.
 
-Embeddings are stored as `real[]` rather than pgvector's `vector(384)` for now:
-nothing reads or writes one yet (§2.7 — the pinned local model is Phase 5), and
-a portable type keeps the whole schema runnable under PGlite. Adding pgvector
-later is one `ALTER` per column plus the HNSW index; the data shape is unchanged.
+Embeddings are stored as `real[]` rather than pgvector's `vector(384)`. The
+dimensions and values are final — they come from the pinned model below — but
+`real[]` keeps the schema runnable under PGlite, which is how it gets tested.
+Moving to pgvector is one `ALTER` per column plus an HNSW index, and buys ANN
+search over the prior-works corpus; nothing needs it at current scale.
+
+## The embedding model
+
+Novelty scoring blends word overlap with meaning. The semantic half runs on a
+pinned local model — `bge-small-en-v1.5`, 384 dimensions, int8 ONNX — fetched
+rather than committed:
+
+```bash
+pnpm --filter @gitlit/embed fetch-model    # 34MB, hash-verified
+```
+
+**It runs under WebAssembly, and that is the point.** Native ONNX dispatches to
+platform-specific SIMD kernels, so the same weights on a different CPU can
+return slightly different floats — enough to move a published similarity in
+the third decimal and make a receipt look tampered with. WASM has
+deterministic floating-point semantics by specification: the same input gives
+bit-identical output on every machine. That is worth more here than the speed
+of the native build, and it is what lets §2.7 hold for a semantic score at all.
+
+Three things are pinned, not one: the weights (by hash, and loading refuses a
+mismatch), the tokenizer (implemented in-tree rather than taken from a
+dependency that could change under a caret range), and the runtime.
+
+Without the model GitLit still runs and still scores — lexically — and says
+which scorer produced the number. It does not quietly return a weaker answer
+in the same shape as a stronger one.
 
 ## The Provenance Diff Viewer
 
@@ -261,7 +289,6 @@ These are staging, not surprises. What is *not* on this list is real and tested.
 |---|---|---|
 | **Git smart HTTP not implemented** (§12.7). | `git clone` of a GitLit repo does not work over the network yet, though the repos on disk are ordinary bare Git repos. | The "clone it and verify offline" promise. |
 | **No OAuth on the MCP HTTP transport.** | Any bearer token maps to the demo user. | Multi-user MCP. |
-| **Novelty scoring is lexical**, not semantic. | Verdicts are weaker than the design intends. The tool says so rather than implying otherwise. | Quality, not correctness. |
 | **Composer is a `<textarea>`**, not TipTap. | No rich text. The input provenance model is real and wired. | Editing comfort. |
 
 Signing keys are **not** on this list any more: they persist per repo, survive

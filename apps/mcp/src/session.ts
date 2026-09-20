@@ -40,6 +40,8 @@ export interface AgentSession {
   fetches: number;
   architectureCommits: number;
   noveltyVerdict?: "sparse_prior_art" | "crowded_field" | "derivative";
+  /** Which scorer produced that verdict — lexical only, or lexical + semantic. */
+  noveltyScorer?: string;
   noveltyAnswered: boolean;
   startedAt: string;
   lastSeenAt: string;

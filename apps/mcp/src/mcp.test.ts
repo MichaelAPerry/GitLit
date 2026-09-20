@@ -1,7 +1,10 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { isBlockedAddress, assertFetchable, toPlainText } from "./fetch-guard.js";
 import { Ledger, contentHash } from "./ledger.js";
-import { scoreNovelty, concepts, noveltyCaveat, SCORER_VERSION } from "./novelty.js";
+import {
+  scoreNovelty, scoreNoveltySemantic, concepts, noveltyCaveat,
+  SCORER_VERSION, HYBRID_SCORER_VERSION, LEXICAL_SCORER_VERSION,
+} from "./novelty.js";
 import { parseArchitecture, validateArchitecture, buildFrontMatter } from "./architecture.js";
 import { SessionStore, QUOTAS } from "./session.js";
 import type { Work } from "./corpora.js";
@@ -403,5 +406,115 @@ describe("session status after a commit", () => {
 
   it("returns nothing for a repo no agent has touched", () => {
     expect(new SessionStore().latestForRepo("r", "u")).toBeUndefined();
+  });
+});
+
+// ------------------------------------------------------- semantic scoring
+
+describe("semantic novelty scoring", () => {
+  const work = (title: string, synopsis: string, year = 2020): Work => ({
+    source: "openlibrary", externalId: title, title, authors: [], publishedYear: year, synopsis,
+  });
+
+  /**
+   * A stand-in embedder: deterministic, and it recognises the one thing the
+   * lexical scorer cannot — that two descriptions can mean the same thing
+   * while sharing almost no words.
+   */
+  const CONCEPTS = ["lighthouse", "island", "return", "inheritance", "orbit", "vegetable"];
+  const SYNONYMS: Record<string, string> = {
+    beacon: "lighthouse", warden: "lighthouse", keeper: "lighthouse",
+    isle: "island", birthplace: "island", home: "return", came: "return",
+    returns: "return", returned: "return", daughter: "inheritance", will: "inheritance",
+    orbital: "orbit", station: "orbit", root: "vegetable", crops: "vegetable",
+  };
+  const fakeEmbedder = {
+    id: "fake@v1",
+    weightsHash: "deadbeef",
+    async embed(texts: string[]): Promise<Float32Array[]> {
+      return texts.map((text) => {
+        const vector = new Float32Array(CONCEPTS.length);
+        for (const raw of text.toLowerCase().match(/[a-z]+/g) ?? []) {
+          const concept = SYNONYMS[raw] ?? raw;
+          const index = CONCEPTS.indexOf(concept);
+          if (index >= 0) vector[index] = (vector[index] ?? 0) + 1;
+        }
+        const norm = Math.sqrt(vector.reduce((n, x) => n + x * x, 0)) || 1;
+        return vector.map((x) => x / norm);
+      });
+    },
+  };
+  const fakeCosine = (a: Float32Array, b: Float32Array) => {
+    let dot = 0;
+    for (let i = 0; i < a.length; i++) dot += a[i]! * b[i]!;
+    return Number(Math.max(-1, Math.min(1, dot)).toFixed(4));
+  };
+
+  const premise = "A lighthouse keeper's daughter returns to the island she swore to leave.";
+
+  it("CATCHES A PARAPHRASE THE LEXICAL SCORER MISSES", async () => {
+    // Almost no shared vocabulary, same book.
+    const works = [work("Beacon", "The warden's daughter came home to the isle of her birthplace.")];
+
+    const lexicalOnly = scoreNovelty(premise, works);
+    const hybrid = await scoreNoveltySemantic(premise, works, fakeEmbedder, fakeCosine);
+
+    expect(lexicalOnly.corpusSimilarity).toBeLessThan(0.4);
+    expect(hybrid.corpusSimilarity).toBeGreaterThan(lexicalOnly.corpusSimilarity);
+    expect(hybrid.nearestWorks[0]!.semantic).toBeGreaterThan(0.7);
+  });
+
+  it("still ranks unrelated work as unrelated", async () => {
+    const works = [work("Orbital Roots", "A manual for growing root crops on an orbital station.")];
+    const hybrid = await scoreNoveltySemantic(premise, works, fakeEmbedder, fakeCosine);
+    expect(hybrid.suggestedVerdict).toBe("sparse_prior_art");
+  });
+
+  it("reports both halves separately so the exact one stays checkable", async () => {
+    const works = [work("Beacon", "The warden's daughter came home to the isle.")];
+    const hybrid = await scoreNoveltySemantic(premise, works, fakeEmbedder, fakeCosine);
+    const nearest = hybrid.nearestWorks[0]!;
+    expect(nearest.lexical).toBeTypeOf("number");
+    expect(nearest.semantic).toBeTypeOf("number");
+    expect(nearest.similarity).not.toBe(nearest.lexical);
+  });
+
+  it("records which embedder produced the numbers", async () => {
+    const hybrid = await scoreNoveltySemantic(premise, [work("X", "y")], fakeEmbedder, fakeCosine);
+    expect(hybrid.scorerVersion).toBe(HYBRID_SCORER_VERSION);
+    expect(hybrid.semantic?.embedderId).toBe("fake@v1");
+    expect(hybrid.semantic?.weightsHash).toBe("deadbeef");
+  });
+
+  it("marks a lexical-only run as such, so the two cannot be confused", () => {
+    expect(scoreNovelty(premise, []).scorerVersion).toBe(LEXICAL_SCORER_VERSION);
+    expect(scoreNovelty(premise, []).semantic).toBeUndefined();
+  });
+
+  it("is deterministic", async () => {
+    const works = [work("Beacon", "The warden's daughter came home.")];
+    const a = await scoreNoveltySemantic(premise, works, fakeEmbedder, fakeCosine);
+    const b = await scoreNoveltySemantic(premise, works, fakeEmbedder, fakeCosine);
+    expect(a).toEqual(b);
+  });
+
+  it("handles an empty corpus without dividing by zero", async () => {
+    const empty = await scoreNoveltySemantic(premise, [], fakeEmbedder, fakeCosine);
+    expect(empty.corpusSimilarity).toBe(0);
+    expect(empty.suggestedVerdict).toBe("sparse_prior_art");
+  });
+});
+
+describe("the architecture records how the verdict was reached", () => {
+  it("states the scorer that actually ran, not a hardcoded one", () => {
+    const hybrid = buildFrontMatter({
+      sessionId: "sess_1", premiseHash: "h", scorerVersion: HYBRID_SCORER_VERSION,
+    });
+    expect(hybrid).toContain("novelty_scorer: novelty/hybrid-v2");
+
+    const lexical = buildFrontMatter({
+      sessionId: "sess_1", premiseHash: "h", scorerVersion: LEXICAL_SCORER_VERSION,
+    });
+    expect(lexical).toContain("novelty_scorer: novelty/lexical-v1");
   });
 });
