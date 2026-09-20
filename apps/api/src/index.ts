@@ -10,9 +10,10 @@ import { countWords, denormalize, parseArchitecture } from "@gitlit/prose";
 import { gitd } from "./gitd-client.js";
 import { initDb } from "./db.js";
 import {
-  auth, clearSessionCookie, requireAccess, requireUser, resolvePrincipal, setSessionCookie,
+  auth, clearSessionCookie, oauth, requireAccess, requireUser, resolvePrincipal,
+  setSessionCookie, PUBLIC_URL, WEB_URL,
 } from "./auth-plugin.js";
-import { ALL_SCOPES, authorize, type Scope } from "@gitlit/auth";
+import { ALL_SCOPES, OAuthError, authorize, type Scope } from "@gitlit/auth";
 import { repos, type RepoRecord } from "./repos.js";
 import { authoringSessions, evidenceFor } from "./sessions.js";
 
@@ -24,6 +25,12 @@ await initDb();
 
 app.setErrorHandler((err, _req, reply) => {
   if (err instanceof GitLitError) return reply.status(err.status).send(err.toProblem());
+  if (err instanceof OAuthError) {
+    return reply.status(400).send({
+      type: `https://gitlit.app/errors/oauth-${err.code}`,
+      title: "Sign-in failed", status: 400, detail: err.message,
+    });
+  }
   app.log.error(err);
   return reply.status(500).send({ title: "Internal error", status: 500 });
 });
@@ -87,6 +94,81 @@ app.get("/v1/me", async (req) => {
   const user = await auth.getUser(principal.userId);
   if (!user) throw notFound("User");
   return { user, via: principal.via, scopes: principal.scopes };
+});
+
+// ------------------------------------------------------------------ oauth
+
+app.get("/v1/auth/providers", async () => ({ providers: oauth.available() }));
+
+const callbackUri = (provider: string) => `${PUBLIC_URL}/v1/auth/oauth/${provider}/callback`;
+
+/** Start a provider sign-in. Redirects the browser to the provider. */
+app.get("/v1/auth/oauth/:provider", async (req, reply) => {
+  const { provider } = req.params as { provider: string };
+  const q = z.object({ returnTo: z.string().optional(), link: z.coerce.boolean().default(false) })
+    .parse(req.query);
+
+  // `link` attaches a provider to the account already signed in here.
+  const linkUserId = q.link ? requireUser(req).userId : undefined;
+
+  const { url } = await oauth.begin({
+    provider,
+    redirectUri: callbackUri(provider),
+    returnTo: q.returnTo,
+    linkUserId,
+  });
+  return reply.redirect(url, 302);
+});
+
+/**
+ * Provider callback. Ends at the web app either way — a raw JSON error on a
+ * redirect from GitHub is a dead end for someone who only wanted to sign in.
+ */
+app.get("/v1/auth/oauth/:provider/callback", async (req, reply) => {
+  const { provider } = req.params as { provider: string };
+  const q = z.object({
+    code: z.string().optional(),
+    state: z.string().optional(),
+    error: z.string().optional(),
+    error_description: z.string().optional(),
+  }).parse(req.query);
+
+  const fail = (message: string) =>
+    reply.redirect(`${WEB_URL}/signin?error=${encodeURIComponent(message)}`, 302);
+
+  // The author declined at the provider; not an error worth alarming them over.
+  if (q.error) {
+    return fail(q.error === "access_denied"
+      ? "Sign-in was cancelled."
+      : q.error_description ?? q.error);
+  }
+  if (!q.code || !q.state) return fail("That sign-in link was incomplete. Please try again.");
+
+  try {
+    const result = await oauth.complete({
+      provider, code: q.code, state: q.state, redirectUri: callbackUri(provider),
+    });
+    setSessionCookie(reply, result.sessionToken);
+    const target = new URL(result.returnTo, WEB_URL);
+    target.searchParams.set("session", result.sessionToken);
+    return reply.redirect(target.toString(), 302);
+  } catch (err) {
+    app.log.warn({ err, provider }, "oauth callback failed");
+    return fail(err instanceof Error ? err.message : "Sign-in failed.");
+  }
+});
+
+app.get("/v1/me/providers", async (req) => {
+  const principal = requireUser(req);
+  return { providers: await oauth.linkedProviders(principal.userId) };
+});
+
+app.delete("/v1/me/providers/:provider", async (req) => {
+  const principal = requireUser(req);
+  const { provider } = req.params as { provider: string };
+  const removed = await oauth.unlink(principal.userId, provider);
+  if (!removed) throw notFound(`No linked ${provider} account`);
+  return { unlinked: true };
 });
 
 // ------------------------------------------------------------- api tokens

@@ -1,5 +1,8 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { PgAuthStore, authorize, type Capability, type Principal } from "@gitlit/auth";
+import {
+  OAuthService, PgAuthStore, authorize, liveHttpClient,
+  type Capability, type Principal, type ProviderConfig, type ProviderId,
+} from "@gitlit/auth";
 import { forbidden, GitLitError } from "@gitlit/core";
 import type { RepoRecord } from "./repos.js";
 
@@ -15,6 +18,44 @@ export const auth = new Proxy({} as PgAuthStore, {
 });
 
 export const SESSION_COOKIE = "gitlit_session";
+
+/**
+ * Provider credentials come from the environment and nowhere else. An
+ * unconfigured provider is simply absent from the sign-in page rather than a
+ * button that fails when pressed.
+ */
+function providerConfigs(): Partial<Record<ProviderId, ProviderConfig>> {
+  const configs: Partial<Record<ProviderId, ProviderConfig>> = {};
+  if (process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET) {
+    configs.github = {
+      id: "github",
+      clientId: process.env.GITHUB_CLIENT_ID,
+      clientSecret: process.env.GITHUB_CLIENT_SECRET,
+    };
+  }
+  if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+    configs.google = {
+      id: "google",
+      clientId: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    };
+  }
+  return configs;
+}
+
+let oauthService: OAuthService | null = null;
+export const oauth = new Proxy({} as OAuthService, {
+  get(_t, prop) {
+    oauthService ??= new OAuthService(
+      db(), providerConfigs(), liveHttpClient,
+      (userId) => auth.createSession(userId),
+    );
+    return Reflect.get(oauthService, prop, oauthService);
+  },
+});
+
+export const PUBLIC_URL = process.env.PUBLIC_API_URL ?? "http://localhost:4000";
+export const WEB_URL = process.env.PUBLIC_WEB_URL ?? "http://localhost:3000";
 
 declare module "fastify" {
   interface FastifyRequest { principal: Principal | null }

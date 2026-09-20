@@ -1,22 +1,49 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
 import { API } from "@/lib/api";
+
+interface Provider { id: string; label: string }
 
 /**
  * Passwordless sign-in. There is no password anywhere in GitLit: nothing to
  * leak, nothing to reuse, and nothing for an author to lose along with access
  * to their own manuscript.
  */
-export default function SignIn() {
+export default function SignInPage() {
+  return (
+    <Suspense fallback={<p className="meta">Loading…</p>}>
+      <SignIn />
+    </Suspense>
+  );
+}
+
+function SignIn() {
   const router = useRouter();
+  const search = useSearchParams();
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
   const [devToken, setDevToken] = useState<string | null>(null);
   const [token, setToken] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(search.get("error"));
   const [busy, setBusy] = useState(false);
+  const [providers, setProviders] = useState<Provider[]>([]);
+
+  // A session handed back by a provider callback arrives in the URL.
+  useEffect(() => {
+    const handed = search.get("session");
+    if (!handed) return;
+    try { localStorage.setItem("gitlit_session", handed); } catch { /* private mode */ }
+    router.replace("/");
+  }, [router, search]);
+
+  useEffect(() => {
+    fetch(`${API}/v1/auth/providers`)
+      .then((r) => r.json())
+      .then((d: { providers: Provider[] }) => setProviders(d.providers))
+      .catch(() => setProviders([]));
+  }, []);
 
   async function request(e: React.FormEvent) {
     e.preventDefault();
@@ -63,6 +90,26 @@ export default function SignIn() {
   return (
     <section style={{ maxWidth: "26rem" }}>
       <h1 style={{ fontFamily: "var(--serif)", fontWeight: 600 }}>Sign in</h1>
+
+      {providers.length > 0 && !sent && (
+        <div style={{ marginBottom: 26 }}>
+          {providers.map((p) => (
+            <a
+              key={p.id}
+              className="btn secondary"
+              style={{ display: "block", textAlign: "center", marginBottom: 8 }}
+              href={`${API}/v1/auth/oauth/${p.id}`}
+            >
+              Continue with {p.label}
+            </a>
+          ))}
+          <p className="meta" style={{ marginTop: 10 }}>
+            GitLit asks {providers.length === 1 ? providers[0]!.label : "these services"} who you
+            are and nothing else — no access to your repositories or files.
+          </p>
+          <p className="meta" style={{ textAlign: "center", margin: "18px 0 0" }}>or</p>
+        </div>
+      )}
 
       {!sent ? (
         <form onSubmit={request}>

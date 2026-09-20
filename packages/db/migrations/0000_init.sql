@@ -3,9 +3,8 @@ CREATE TABLE "accounts" (
 	"user_id" text NOT NULL,
 	"provider" text NOT NULL,
 	"provider_account_id" text NOT NULL,
-	"access_token" text,
-	"refresh_token" text,
-	"expires_at" integer,
+	"linked_email" text,
+	"email_verified_by_provider" boolean DEFAULT false NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
@@ -210,6 +209,21 @@ CREATE TABLE "novelty_reports" (
 	"rationale" text NOT NULL,
 	"author_response" text,
 	"author_responded_at" timestamp with time zone
+);
+--> statement-breakpoint
+CREATE TABLE "oauth_states" (
+	"id" text PRIMARY KEY NOT NULL,
+	"provider" text NOT NULL,
+	"selector" text NOT NULL,
+	"verifier" text NOT NULL,
+	"code_verifier" text NOT NULL,
+	"nonce" text NOT NULL,
+	"return_to" text DEFAULT '/' NOT NULL,
+	"link_user_id" text,
+	"expires_at" timestamp with time zone NOT NULL,
+	"consumed_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "oauth_states_selector_unique" UNIQUE("selector")
 );
 --> statement-breakpoint
 CREATE TABLE "organization_members" (
@@ -453,6 +467,7 @@ ALTER TABLE "notifications" ADD CONSTRAINT "notifications_user_id_users_id_fk" F
 ALTER TABLE "notifications" ADD CONSTRAINT "notifications_repo_id_repositories_id_fk" FOREIGN KEY ("repo_id") REFERENCES "public"."repositories"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "novelty_reports" ADD CONSTRAINT "novelty_reports_session_id_agent_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "public"."agent_sessions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "novelty_reports" ADD CONSTRAINT "novelty_reports_repo_id_repositories_id_fk" FOREIGN KEY ("repo_id") REFERENCES "public"."repositories"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "oauth_states" ADD CONSTRAINT "oauth_states_link_user_id_users_id_fk" FOREIGN KEY ("link_user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "organization_members" ADD CONSTRAINT "organization_members_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "organization_members" ADD CONSTRAINT "organization_members_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "premises" ADD CONSTRAINT "premises_repo_id_repositories_id_fk" FOREIGN KEY ("repo_id") REFERENCES "public"."repositories"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -478,6 +493,7 @@ ALTER TABLE "timeline_events" ADD CONSTRAINT "timeline_events_actor_id_users_id_
 ALTER TABLE "verification_links" ADD CONSTRAINT "verification_links_repo_id_repositories_id_fk" FOREIGN KEY ("repo_id") REFERENCES "public"."repositories"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "verification_links" ADD CONSTRAINT "verification_links_created_by_users_id_fk" FOREIGN KEY ("created_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "accounts_provider_uq" ON "accounts" USING btree ("provider","provider_account_id");--> statement-breakpoint
+CREATE INDEX "accounts_user" ON "accounts" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX "agent_sessions_repo" ON "agent_sessions" USING btree ("repo_id","started_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "tool_calls_session_seq" ON "agent_tool_calls" USING btree ("session_id","seq");--> statement-breakpoint
 CREATE INDEX "sessions_repo" ON "authoring_sessions" USING btree ("repo_id","started_at");--> statement-breakpoint

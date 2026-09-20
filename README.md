@@ -15,11 +15,11 @@ Phases 0–2 of the build order (§15).
 | `packages/prose` | Prose normalizer — one sentence per line (§2.2) | 21 tests |
 | `packages/diff` | Sentence diff, move detection, plan-to-prose derivation (§9) | 45 tests |
 | `packages/provenance` | Spans, trailers, signed receipt chain (§7) | 28 tests |
-| `packages/auth` | Credentials, roles, the authorization decision | 94 tests |
+| `packages/auth` | Credentials, roles, OAuth, the authorization decision | 136 tests |
 | `packages/db` | Drizzle schema for §11, migrations, PGlite test harness | 13 tests |
 | `apps/gitd` | The commit path — the only writer of provenance (§5) | 16 tests |
 | `apps/api` | REST surface (§12), authorization enforcement | 43 tests |
-| `apps/web` | Dashboard, GitLit Write, Provenance Diff Viewer | 67 tests + 4 in-browser |
+| `apps/web` | Dashboard, GitLit Write, Provenance Diff Viewer | 73 tests + 4 in-browser |
 | `apps/mcp` | MCP server — how the AI Researcher executes (§8) | 55 tests |
 
 ## Two properties worth knowing before reading the code
@@ -50,7 +50,7 @@ Then open http://localhost:3000.
 ## Checks
 
 ```bash
-pnpm test        # 435 tests
+pnpm test        # 483 tests
 pnpm typecheck
 pnpm --filter @gitlit/web test:e2e   # 4 real-browser tests
 ```
@@ -162,6 +162,24 @@ leak, reuse, or hash badly — and nothing for an author to lose along with acce
 to their manuscript. In development the link is returned in the response rather
 than emailed.
 
+GitHub and Google sign-in are available when configured; an unconfigured
+provider is simply absent from the page rather than a button that fails.
+
+**GitLit asks a provider who you are and nothing else.** Scopes are
+`read:user user:email` and `openid email profile` — never `repo`. No provider
+access or refresh token is stored: GitLit never calls GitHub or Google on an
+author's behalf, so holding long-lived third-party credentials would be a
+breach liability kept for no purpose.
+
+**An unverified provider email never reaches an existing account.** Anyone can
+set their GitHub address to someone else's; if that were enough to link,
+"Sign in with GitHub" would be an account-takeover primitive against every
+user who ever signed up by email. The rules, in order: a provider identity
+already linked signs in as that user; a signed-in author may attach a provider
+to their own account; a *verified* address links to or creates the user with
+that address; an unverified or absent address is refused, with the reason and
+the remedy.
+
 Three credential types, all 256-bit random and stored as SHA-256 verifiers with
 constant-time comparison:
 
@@ -241,7 +259,6 @@ These are staging, not surprises. What is *not* on this list is real and tested.
 
 | Gap | Consequence today | Blocks |
 |---|---|---|
-| **No OAuth providers.** Sign-in is email magic link only. | Authors cannot use "Sign in with GitHub/Google" yet. The session and token layers are provider-agnostic. | Convenience, not security. |
 | **Git smart HTTP not implemented** (§12.7). | `git clone` of a GitLit repo does not work over the network yet, though the repos on disk are ordinary bare Git repos. | The "clone it and verify offline" promise. |
 | **No OAuth on the MCP HTTP transport.** | Any bearer token maps to the demo user. | Multi-user MCP. |
 | **Novelty scoring is lexical**, not semantic. | Verdicts are weaker than the design intends. The tool says so rather than implying otherwise. | Quality, not correctness. |

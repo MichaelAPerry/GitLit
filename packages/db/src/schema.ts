@@ -46,16 +46,52 @@ export const users = pgTable("users", {
   updatedAt: updated(),
 });
 
+/**
+ * Linked identity providers.
+ *
+ * Deliberately stores NO access or refresh token. GitLit never calls GitHub or
+ * Google on a user's behalf — the provider is used to establish identity at
+ * sign-in and nothing more — so keeping long-lived third-party credentials
+ * would be a breach liability held for no purpose. If a feature ever needs
+ * provider API access, the tokens come back encrypted and scoped to it.
+ *
+ * `emailVerifiedByProvider` records whether the provider vouched for the
+ * address at link time. It is the field account linking turns on (§14).
+ */
 export const accounts = pgTable("accounts", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   provider: text("provider").notNull(),
   providerAccountId: text("provider_account_id").notNull(),
-  accessToken: text("access_token"),
-  refreshToken: text("refresh_token"),
-  expiresAt: integer("expires_at"),
+  linkedEmail: text("linked_email"),
+  emailVerifiedByProvider: boolean("email_verified_by_provider").notNull().default(false),
   createdAt: now(),
-}, (t) => [uniqueIndex("accounts_provider_uq").on(t.provider, t.providerAccountId)]);
+}, (t) => [
+  uniqueIndex("accounts_provider_uq").on(t.provider, t.providerAccountId),
+  index("accounts_user").on(t.userId),
+]);
+
+/**
+ * In-flight OAuth authorizations.
+ *
+ * Holds the CSRF state, the PKCE verifier and the OIDC nonce for one attempt.
+ * Single-use and short-lived: a replayed state is an attack, not a retry.
+ */
+export const oauthStates = pgTable("oauth_states", {
+  id: text("id").primaryKey(),
+  provider: text("provider").notNull(),
+  selector: text("selector").notNull().unique(),
+  verifier: text("verifier").notNull(),
+  codeVerifier: text("code_verifier").notNull(),
+  nonce: text("nonce").notNull(),
+  /** Where to send the browser afterwards. Validated as a local path. */
+  returnTo: text("return_to").notNull().default("/"),
+  /** Set when the flow started from a signed-in session, to link a provider. */
+  linkUserId: text("link_user_id").references(() => users.id, { onDelete: "cascade" }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  consumedAt: timestamp("consumed_at", { withTimezone: true }),
+  createdAt: now(),
+});
 
 /**
  * Browser sessions. Stored as selector + SHA-256 verifier, never the token:
