@@ -15,7 +15,8 @@
     "db:generate": "pnpm --filter @gitlit/db generate",
     "db:migrate": "pnpm --filter @gitlit/db migrate",
     "check": "pnpm typecheck && pnpm test",
-    "preflight": "pnpm --filter @gitlit/preflight build >/dev/null && node packages/preflight/dist/cli.js"
+    "preflight": "pnpm --filter @gitlit/preflight build >/dev/null && node packages/preflight/dist/cli.js",
+    "scan:secrets": "node scripts/scan-secrets.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

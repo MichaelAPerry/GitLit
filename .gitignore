@@ -4,8 +4,28 @@ dist/
 .turbo/
 coverage/
 *.tsbuildinfo
-.env
-.env.local
-repos/
 .DS_Store
 .models/
+
+# --- Never commit these -----------------------------------------------------
+# Environment files. `.env.*` and not just `.env`, because `.env.production`
+# is the natural name to reach for and the one most likely to hold real keys.
+.env
+.env.*
+!.env.example
+
+# Manuscripts and the keys that sign their provenance.
+#
+# `repos/` is the default REPO_ROOT and `backups/` the default BACKUP_DIR, so a
+# backup run from the repository root lands here — and a backup carries both a
+# bundle of someone's book AND a copy of that repository's signing key. A
+# `git add -A` without these lines commits private keys and a manuscript.
+repos/
+backups/
+.gitlit-dev-db/
+
+# Key material by shape, wherever it ends up.
+*.pem
+*.key
+gitlit-signing-key.json
+*.key.json

@@ -514,6 +514,29 @@ from inside the GitLit checkout and passed; the container runs from `/app` and
 backed up nothing, reporting each repository as failed in a log nobody was
 reading.
 
+## Secrets
+
+No key or password is in the code. Every one is read from the environment at
+startup and supplied by the platform's secret store (`fly secrets set`), so
+none is in a file, a repository or a build. `.env.example` is a template of
+the *names*, with deliberately-fake values — which is why preflight checks
+whether the published `dev-service-token-change-me` is still in use.
+
+```bash
+pnpm scan:secrets   # every commit in the whole history, plus uncommitted and
+                    # untracked files
+```
+
+It knows to leave the local development database alone (it is `gitlit/gitlit`
+on localhost and guards nothing), and when it finds something real it says to
+**rotate**, not delete: once pushed, a secret is on other machines and in the
+host's caches, so removing the commit does not un-publish it.
+
+`.gitignore` covers `.env`, `.env.*`, `repos/`, `backups/`, `*.pem`, `*.key`
+and `*.key.json`. `backups/` earns its place — a backup carries both a
+manuscript bundle and a copy of that repository's signing key, and the default
+`BACKUP_DIR` is `./backups`, so a local backup run lands inside the checkout.
+
 ## Known gaps — read this before trusting the build
 
 These are staging, not surprises. What is *not* on this list is real and tested.

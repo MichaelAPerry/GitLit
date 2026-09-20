@@ -255,10 +255,13 @@ are the ones it cannot check, or that matter enough to confirm by eye.
 - [ ] **`GITD_SERVICE_TOKEN` is a generated random string**, not
       `dev-service-token-change-me` from the example file. That value is in
       the public repository.
-- [ ] **No secrets are in git.** `.env` is ignored, but check:
-      `git log -p | grep -iE "re_[a-z0-9]{20}|postgres://"` should find
-      nothing. If it does, **rotate that secret** rather than deleting the
-      commit — once pushed, assume it is public forever.
+- [ ] **No secrets are in git.** Run `pnpm scan:secrets`. It searches every
+      commit in the whole history, plus files you have not committed yet, and
+      knows to leave the published local-development database alone. If it
+      finds something, **rotate that secret** — issue a new one and revoke the
+      old one. Do not just delete the line: once pushed, the old commit is on
+      other machines and in GitHub's caches, so removing it does not
+      un-publish it.
 - [ ] **`PUBLIC_WEB_URL` is exactly your site.** This is the list of websites
       allowed to talk to the api as a signed-in author. Wrong, and either the
       dashboard breaks or — worse — another site could read manuscripts on a
@@ -269,6 +272,34 @@ are the ones it cannot check, or that matter enough to confirm by eye.
       locally, an open door in public.
 - [ ] **Visit `https://api.gitlit.app/health`.** It should say `ok`. If it
       says `"monitoring": false` and you set up Sentry, the DSN did not take.
+
+### Where the secrets actually live
+
+Worth being clear about, because it is the thing people most often get wrong.
+
+**No key or password is in the code.** Every one is read from the environment
+at startup — `process.env.RESEND_API_KEY` and so on — and the values come from
+`fly secrets set`, which stores them encrypted at Fly and injects them into the
+running machine. They are never in a file, never in the repository, and never
+in a build.
+
+The one file that *looks* like secrets is `.env.example`. It is a template of
+the names, with obviously-fake values like `dev-service-token-change-me`. That
+is exactly why `pnpm preflight` checks whether you are still using that value:
+it is published, so anyone can read it.
+
+Two places a secret can still escape, both on your side:
+
+- **Your terminal history.** The `fly secrets set ... "re_..."` commands above
+  get saved to your shell history. On a shared machine, clear it afterwards
+  (`history -c`) or put a space before the command, which most shells skip.
+- **A file you create yourself.** `.gitignore` covers `.env`, `.env.*`,
+  `repos/`, `backups/`, `*.pem` and `*.key`, so the obvious names are safe.
+  `pnpm scan:secrets` is the backstop for the ones nobody anticipated.
+
+`backups/` matters more than it looks: a backup holds both a copy of someone's
+manuscript and a copy of that repository's signing key, so committing one would
+publish both.
 
 ### Three failures that look like success
 
