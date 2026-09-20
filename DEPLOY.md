@@ -94,6 +94,20 @@ repositories or files, and stores nothing that would let it act as you later.
 
 Install the Fly CLI (`flyctl`), then `fly auth signup`.
 
+**Create the four apps first.** `fly secrets set` needs an app to set secrets
+*on*, so this has to come before the secrets, not after:
+
+```
+fly apps create gitlit-api
+fly apps create gitlit-gitd
+fly apps create gitlit-web
+fly apps create gitlit-mcp
+```
+
+This makes the apps without deploying anything. If a name is taken, pick
+another and use it consistently from here on — including in the `fly.toml`
+files in step 5.
+
 Create the database:
 
 ```
@@ -117,24 +131,72 @@ openssl rand -base64 32
 longer be unlocked, which breaks the provenance history GitLit exists to keep.
 Put it in a password manager today, before you deploy.
 
-Then set everything:
+### What actually happens when you set one
+
+The value goes to Fly's API, which **can encrypt but cannot decrypt**, and is
+stored in an encrypted vault. When a machine boots, Fly issues it a temporary
+token, decrypts that app's secrets, and injects them as environment variables
+into the running process. They never touch your repository, your image, or
+your `fly.toml`.
+
+Three consequences worth knowing before you start:
+
+- **You can never read a secret back.** `fly secrets list` shows the name, a
+  digest and when it was set — never the value. Fly does not allow read access
+  to the plaintext, by design. So the password-manager advice above is not
+  belt-and-braces: **if you lose `SIGNING_MASTER_KEY`, it is gone**, and with
+  it every existing provenance receipt.
+- **Setting a secret restarts the machines.** Fine now, since nothing is
+  running. Later, `--stage` defers the restart until the next deploy.
+- **Secrets are per app.** `gitlit-api` and `gitlit-gitd` each need their own,
+  which is why `GITD_SERVICE_TOKEN` appears twice below.
+
+### Setting them without leaving them in your shell history
+
+`fly secrets set KEY="value"` puts the value in your terminal's saved history,
+where it stays in a plain file on your machine. `fly secrets import` reads
+`NAME=VALUE` lines from standard input instead, so nothing is ever typed as an
+argument:
 
 ```
-fly secrets set -a gitlit-api \
-  DATABASE_URL="postgres://..." \
-  GITD_SERVICE_TOKEN="..." \
-  RESEND_API_KEY="re_..." \
-  MAIL_FROM="GitLit <hello@gitlit.app>" \
-  GITHUB_CLIENT_ID="..." GITHUB_CLIENT_SECRET="..." \
-  GOOGLE_CLIENT_ID="..." GOOGLE_CLIENT_SECRET="..."
+fly secrets import -a gitlit-api --stage <<'EOF'
+DATABASE_URL=postgres://...
+GITD_SERVICE_TOKEN=...
+RESEND_API_KEY=re_...
+MAIL_FROM=GitLit <hello@gitlit.app>
+GITHUB_CLIENT_ID=...
+GITHUB_CLIENT_SECRET=...
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+OPERATOR_TOKEN=...
+EOF
 
-fly secrets set -a gitlit-gitd \
-  GITD_SERVICE_TOKEN="..." \
-  SIGNING_MASTER_KEY="..."
+fly secrets import -a gitlit-gitd --stage <<'EOF'
+GITD_SERVICE_TOKEN=...
+SIGNING_MASTER_KEY=...
+OPERATOR_TOKEN=...
+EOF
 ```
+
+Type it exactly as shown. The `<<'EOF'` part means "everything until the next
+line that says `EOF` is input" — paste your values in place of the `...`, then
+`EOF` on its own line. No quotes around the values, and no spaces around the
+`=`. The quotes around `'EOF'` matter: they stop the shell interpreting
+anything in your values.
+
+`--stage` means "store these, apply at next deploy" — which is what you want,
+since nothing is deployed yet.
 
 `GITD_SERVICE_TOKEN` must be **the same value in both**. It is a shared
-password between two programs; if they disagree, every save fails.
+password between two programs; if they disagree, every save fails. Same for
+`OPERATOR_TOKEN`, which is what lets `pnpm preflight` check them in step 7.
+
+Check they landed — this shows names only, never values:
+
+```
+fly secrets list -a gitlit-api
+fly secrets list -a gitlit-gitd
+```
 
 ---
 
@@ -146,7 +208,16 @@ with yours:
 - `apps/api/fly.toml` — `PUBLIC_API_URL`, `PUBLIC_WEB_URL`
 - `apps/web/fly.toml` — `NEXT_PUBLIC_API_URL`
 
-(`apps/gitd/fly.toml` and `apps/mcp/fly.toml` need no changes.)
+**If any app name was taken in step 4**, you also need to change it in three
+places, or the services will look for each other under the wrong names:
+
+- the `app = "..."` line at the top of that service's `fly.toml`
+- `GITD_URL` in `apps/api/fly.toml` (`http://<gitd-app-name>.internal:4001`)
+- `GITLIT_API_URL` in `apps/gitd/fly.toml` and `apps/mcp/fly.toml`
+  (`http://<api-app-name>.internal:4000`)
+
+Those `.internal` addresses are Fly's private network: they resolve by app
+name, inside your organisation only, and never leave it.
 
 `PUBLIC_WEB_URL` is load-bearing twice over. It is the address sign-in links
 point at, **and** it is the only website allowed to talk to the api from a
@@ -191,15 +262,9 @@ It prints a list you can read, writes a page you can keep, and exits non-zero
 if something failed. It changes nothing, except sending one sign-in email to
 the address you give it.
 
-To include the settings, signing-key and backup checks, generate one more
-secret and set it on **both** apps:
-
-```
-fly secrets set -a gitlit-api  OPERATOR_TOKEN="$(openssl rand -base64 32)"
-fly secrets set -a gitlit-gitd OPERATOR_TOKEN="<the same value>"
-```
-
-Without it those checks are skipped, not opened to anyone.
+The settings, signing-key and backup checks need `OPERATOR_TOKEN`, which you
+set on both apps back in step 4. Without it those checks are skipped, not
+opened to anyone.
 
 **What it can tell you:** whether the site is reachable over https; whether a
 stranger website is refused; whether your dashboard is allowed to talk to the
@@ -290,9 +355,9 @@ it is published, so anyone can read it.
 
 Two places a secret can still escape, both on your side:
 
-- **Your terminal history.** The `fly secrets set ... "re_..."` commands above
-  get saved to your shell history. On a shared machine, clear it afterwards
-  (`history -c`) or put a space before the command, which most shells skip.
+- **Your terminal history**, if you use `fly secrets set` rather than the
+  `fly secrets import` form in step 4. `set` puts the value in your shell's
+  saved history as a plain file; `import` reads it from input and never does.
 - **A file you create yourself.** `.gitignore` covers `.env`, `.env.*`,
   `repos/`, `backups/`, `*.pem` and `*.key`, so the obvious names are safe.
   `pnpm scan:secrets` is the backstop for the ones nobody anticipated.
