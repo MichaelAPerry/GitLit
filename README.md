@@ -50,7 +50,7 @@ Then open http://localhost:3000.
 ## Checks
 
 ```bash
-pnpm test        # 425 tests
+pnpm test        # 435 tests
 pnpm typecheck
 pnpm --filter @gitlit/web test:e2e   # 4 real-browser tests
 ```
