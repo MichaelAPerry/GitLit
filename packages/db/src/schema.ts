@@ -8,18 +8,23 @@
  */
 import {
   pgTable, text, integer, boolean, timestamp, jsonb, real, bigserial, primaryKey,
-  index, uniqueIndex, customType, doublePrecision,
+  index, uniqueIndex, doublePrecision, check,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
-const vector = (dim: number) =>
-  customType<{ data: number[]; driverData: string }>({
-    dataType: () => `vector(${dim})`,
-    toDriver: (v) => `[${v.join(",")}]`,
-    fromDriver: (v) => JSON.parse(v) as number[],
-  });
-
-/** Local, version-pinned embeddings (§2.7). Dimension is part of the contract. */
-const embedding = vector(384);
+/**
+ * Embedding storage.
+ *
+ * `real[]` rather than pgvector's `vector(384)` for now, deliberately. Nothing
+ * reads or writes an embedding yet — novelty scoring is lexical and the pinned
+ * local model is Phase 5 (§2.7) — and a portable array type keeps the whole
+ * schema runnable under PGlite, which is how these tables get tested at all.
+ *
+ * The migration when the embedder lands is one ALTER per column plus the HNSW
+ * index; the data shape does not change. What `real[]` cannot do is ANN search,
+ * which nothing does today.
+ */
+const embedding = () => real("embedding").array();
 
 const now = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 const updated = () => timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
@@ -52,12 +57,30 @@ export const accounts = pgTable("accounts", {
   createdAt: now(),
 }, (t) => [uniqueIndex("accounts_provider_uq").on(t.provider, t.providerAccountId)]);
 
+/**
+ * Browser sessions. Stored as selector + SHA-256 verifier, never the token:
+ * a database read must not yield anything that can be presented as a
+ * credential.
+ */
 export const sessions = pgTable("sessions", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-  sessionToken: text("session_token").notNull().unique(),
-  expires: timestamp("expires", { withTimezone: true }).notNull(),
-});
+  selector: text("selector").notNull().unique(),
+  verifier: text("verifier").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  createdAt: now(),
+}, (t) => [index("sessions_user").on(t.userId)]);
+
+/** Single-use sign-in links. Consumed rows are kept so replay is detectable. */
+export const magicLinks = pgTable("magic_links", {
+  id: text("id").primaryKey(),
+  email: text("email").notNull(),
+  selector: text("selector").notNull().unique(),
+  verifier: text("verifier").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  consumedAt: timestamp("consumed_at", { withTimezone: true }),
+  createdAt: now(),
+}, (t) => [index("magic_links_email").on(t.email)]);
 
 export const organizations = pgTable("organizations", {
   id: text("id").primaryKey(),
@@ -102,7 +125,23 @@ export const repositories = pgTable("repositories", {
   archivedAt: timestamp("archived_at", { withTimezone: true }),
   createdAt: now(),
   updatedAt: updated(),
-}, (t) => [uniqueIndex("repositories_owner_slug").on(t.ownerUserId, t.ownerOrgId, t.slug)]);
+}, (t) => [
+  /**
+   * One slug per owner. Must be an expression index over COALESCE, not a
+   * plain three-column index: owner_org_id is NULL for user-owned repos and
+   * Postgres treats NULLs as distinct, so a composite index containing a
+   * nullable column enforces nothing at all.
+   */
+  uniqueIndex("repositories_owner_slug").on(
+    sql`coalesce(${t.ownerUserId}, ${t.ownerOrgId})`,
+    t.slug,
+  ),
+  // Exactly one owner, never both and never neither.
+  check(
+    "repositories_one_owner",
+    sql`(${t.ownerUserId} is null) <> (${t.ownerOrgId} is null)`,
+  ),
+]);
 
 export const repositoryCollaborators = pgTable("repository_collaborators", {
   repoId: text("repo_id").notNull().references(() => repositories.id, { onDelete: "cascade" }),
@@ -301,7 +340,7 @@ export const premises = pgTable("premises", {
   textHash: text("text_hash").notNull(),
   themes: text("themes").array(),
   entities: jsonb("entities"),
-  embedding: embedding("embedding"),
+  embedding: embedding(),
   embeddingModel: text("embedding_model").notNull(),
   createdAt: now(),
 }, (t) => [uniqueIndex("premises_repo_version").on(t.repoId, t.version)]);
@@ -328,7 +367,7 @@ export const researchSources = pgTable("research_sources", {
   excerptRef: text("excerpt_ref"),
   domain: text("domain"),
   usedInBeats: text("used_in_beats").array(),
-  embedding: embedding("embedding"),
+  embedding: embedding(),
 }, (t) => [index("sources_repo").on(t.repoId, t.domain)]);
 
 export const noveltyReports = pgTable("novelty_reports", {
@@ -360,9 +399,11 @@ export const priorWorks = pgTable("prior_works", {
   isbn: text("isbn"),
   synopsis: text("synopsis"),
   subjects: text("subjects").array(),
-  embedding: embedding("embedding"),
+  embedding: embedding(),
   fetchedAt: now(),
 }, (t) => [uniqueIndex("prior_works_source_ext").on(t.source, t.externalId)]);
+// The HNSW index arrives with pgvector and the embedder (Phase 5). An index on
+// real[] would not serve ANN search, so adding one now would be decoration.
 
 // ------------------------------------------------ diffs, review, platform
 
@@ -427,8 +468,10 @@ export const apiTokens = pgTable("api_tokens", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
-  tokenHash: text("token_hash").notNull().unique(),
+  selector: text("selector").notNull().unique(),
+  verifier: text("verifier").notNull(),
   scopes: text("scopes").array().notNull(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
   lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
   expiresAt: timestamp("expires_at", { withTimezone: true }),
   createdAt: now(),

@@ -15,10 +15,10 @@ Phases 0–2 of the build order (§15).
 | `packages/prose` | Prose normalizer — one sentence per line (§2.2) | 21 tests |
 | `packages/diff` | Sentence diff, move detection, word runs (§9.3) | 18 tests |
 | `packages/provenance` | Spans, trailers, signed receipt chain (§7) | 28 tests |
-| `packages/auth` | Credentials, roles, the authorization decision | 56 tests |
-| `packages/db` | Drizzle schema for §11 | typechecked |
+| `packages/auth` | Credentials, roles, the authorization decision | 94 tests |
+| `packages/db` | Drizzle schema for §11, migrations, PGlite test harness | 13 tests |
 | `apps/gitd` | The commit path — the only writer of provenance (§5) | 16 tests |
-| `apps/api` | REST surface (§12), authorization enforcement | 41 tests |
+| `apps/api` | REST surface (§12), authorization enforcement | 43 tests |
 | `apps/web` | Dashboard + GitLit Write (§7.5) | — |
 | `apps/mcp` | MCP server — how the AI Researcher executes (§8) | 55 tests |
 
@@ -50,13 +50,39 @@ Then open http://localhost:3000.
 ## Checks
 
 ```bash
-pnpm test        # 262 tests
+pnpm test        # 315 tests
 pnpm typecheck
 ```
 
+## Data
+
+Postgres 16 via Drizzle. `pnpm db:migrate` applies `packages/db/migrations`.
+
+**Tests run against real Postgres, in-process.** PGlite is Postgres compiled to
+WASM, so the suite executes the same migrations and the same SQL production
+does — no mock, no in-memory stand-in with different semantics. This is not
+pedantry: the first thing it caught was a unique index over a nullable column,
+which Postgres does not enforce at all (`NULL != NULL`), so the same author
+could create the same book slug twice. Nothing short of real Postgres finds
+that.
+
+Two things the database is **not**:
+
+- It is not the source of truth for content or provenance. Those live in Git
+  (§2.3), and every table derived from them can be rebuilt by replaying a
+  repository's history.
+- It is not optional for identity. Users, sessions and tokens have no other
+  source of truth — losing them loses real state rather than something a
+  reindex could reconstruct.
+
+Embeddings are stored as `real[]` rather than pgvector's `vector(384)` for now:
+nothing reads or writes one yet (§2.7 — the pinned local model is Phase 5), and
+a portable type keeps the whole schema runnable under PGlite. Adding pgvector
+later is one `ALTER` per column plus the HNSW index; the data shape is unchanged.
+
 ## Authentication
 
-Passwordless. Sign-in is a single-use emailed link, so there is no password to
+Passwordless, and backed by Postgres. Sign-in is a single-use emailed link, so there is no password to
 leak, reuse, or hash badly — and nothing for an author to lose along with access
 to their manuscript. In development the link is returned in the response rather
 than emailed.
@@ -141,7 +167,6 @@ These are staging, not surprises. What is *not* on this list is real and tested.
 | Gap | Consequence today | Blocks |
 |---|---|---|
 | **No OAuth providers.** Sign-in is email magic link only. | Authors cannot use "Sign in with GitHub/Google" yet. The session and token layers are provider-agnostic. | Convenience, not security. |
-| **Postgres not wired.** Schema typechecks; nothing imports it. | Repositories and authoring sessions are in-memory and die with the API process. Git history survives — it is on disk — so nothing a commit recorded is lost. | Multi-process, restarts. |
 | **Git smart HTTP not implemented** (§12.7). | `git clone` of a GitLit repo does not work over the network yet, though the repos on disk are ordinary bare Git repos. | The "clone it and verify offline" promise. |
 | **No OAuth on the MCP HTTP transport.** | Any bearer token maps to the demo user. | Multi-user MCP. |
 | **Novelty scoring is lexical**, not semantic. | Verdicts are weaker than the design intends. The tool says so rather than implying otherwise. | Quality, not correctness. |

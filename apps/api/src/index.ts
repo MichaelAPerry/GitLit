@@ -5,15 +5,19 @@ import { GitLitError, assertAgentWritable, forbidden, newRepoId, notFound } from
 import { diffProse } from "@gitlit/diff";
 import { countWords, denormalize } from "@gitlit/prose";
 import { gitd } from "./gitd-client.js";
+import { initDb } from "./db.js";
 import {
   auth, clearSessionCookie, requireAccess, requireUser, resolvePrincipal, setSessionCookie,
 } from "./auth-plugin.js";
 import { ALL_SCOPES, type Scope } from "@gitlit/auth";
-import { repos, type RepoRecord } from "./store.js";
+import { repos, type RepoRecord } from "./repos.js";
 import { authoringSessions, evidenceFor } from "./sessions.js";
 
 export const app = Fastify({ logger: process.env.NODE_ENV !== "test" });
 await app.register(cors, { origin: true });
+
+// Everything below needs a database; fail at startup rather than per request.
+await initDb();
 
 app.setErrorHandler((err, _req, reply) => {
   if (err instanceof GitLitError) return reply.status(err.status).send(err.toProblem());
@@ -21,17 +25,17 @@ app.setErrorHandler((err, _req, reply) => {
   return reply.status(500).send({ title: "Internal error", status: 500 });
 });
 
-app.addHook("onRequest", async (req) => { req.principal = resolvePrincipal(req); });
+app.addHook("onRequest", async (req) => { req.principal = await resolvePrincipal(req); });
 
-const mustFind = (owner: string, slug: string): RepoRecord => {
-  const r = repos.find(owner, slug);
+async function mustFind(owner: string, slug: string): Promise<RepoRecord> {
+  const r = await repos.find(owner, slug);
   if (!r) throw notFound(`Repository ${owner}/${slug}`);
   return r;
-};
+}
 
 /** Git identity for a commit, taken from the signed-in user — never the client. */
-function committer(userId: string) {
-  const user = auth.getUser(userId);
+async function committer(userId: string) {
+  const user = await auth.getUser(userId);
   if (!user) throw notFound("User");
   return { name: user.displayName ?? user.handle, email: user.email, id: user.id };
 }
@@ -46,7 +50,7 @@ app.get("/health", async () => ({ ok: true, service: "api" }));
  */
 app.post("/v1/auth/magic-link", async (req) => {
   const body = z.object({ email: z.string().email() }).parse(req.body);
-  const { token } = auth.issueMagicLink(body.email);
+  const { token } = await auth.issueMagicLink(body.email);
   const devToken = process.env.NODE_ENV === "production" ? undefined : token;
   app.log.info({ email: body.email }, "magic link issued");
   return {
@@ -60,7 +64,7 @@ app.post("/v1/auth/magic-link", async (req) => {
 
 app.post("/v1/auth/session", async (req, reply) => {
   const body = z.object({ token: z.string() }).parse(req.body);
-  const result = auth.consumeMagicLink(body.token);
+  const result = await auth.consumeMagicLink(body.token);
   if (!result) {
     throw new GitLitError("invalid-link", 401, "Invalid link", "That sign-in link is invalid, used, or expired.");
   }
@@ -70,14 +74,14 @@ app.post("/v1/auth/session", async (req, reply) => {
 
 app.post("/v1/auth/signout", async (req, reply) => {
   const header = req.headers.authorization;
-  if (header?.startsWith("Bearer ")) auth.revokeSession(header.slice(7).trim());
+  if (header?.startsWith("Bearer ")) await auth.revokeSession(header.slice(7).trim());
   clearSessionCookie(reply);
   return { signedOut: true };
 });
 
 app.get("/v1/me", async (req) => {
   const principal = requireUser(req);
-  const user = auth.getUser(principal.userId);
+  const user = await auth.getUser(principal.userId);
   if (!user) throw notFound("User");
   return { user, via: principal.via, scopes: principal.scopes };
 });
@@ -88,7 +92,7 @@ app.get("/v1/tokens", async (req) => {
   const principal = requireUser(req);
   // Never serve the verifier or selector — they are the credential material.
   return {
-    tokens: auth.listTokens(principal.userId).map((t) => ({
+    tokens: (await auth.listTokens(principal.userId)).map((t) => ({
       id: t.id, name: t.name, scopes: t.scopes, createdAt: t.createdAt,
       expiresAt: t.expiresAt, lastUsedAt: t.lastUsedAt,
     })),
@@ -108,7 +112,7 @@ app.post("/v1/tokens", async (req, reply) => {
     expiresAt: z.string().datetime().optional(),
   }).parse(req.body);
 
-  const { token, record } = auth.issueToken({ userId: principal.userId, ...body });
+  const { token, record } = await auth.issueToken({ userId: principal.userId, ...body });
   return reply.status(201).send({
     token,
     record: {
@@ -122,14 +126,14 @@ app.post("/v1/tokens", async (req, reply) => {
 app.delete("/v1/tokens/:id", async (req) => {
   const principal = requireUser(req);
   const { id } = req.params as { id: string };
-  if (!auth.revokeToken(principal.userId, id)) throw notFound(`Token ${id}`);
+  if (!await auth.revokeToken(principal.userId, id)) throw notFound(`Token ${id}`);
   return { revoked: true };
 });
 
 // ----------------------------------------------------------- repositories
 
 app.get("/v1/repositories", async (req) => ({
-  repositories: repos.listFor(req.principal?.userId ?? null),
+  repositories: await repos.listFor(req.principal?.userId ?? null),
 }));
 
 app.post("/v1/repositories", async (req, reply) => {
@@ -137,7 +141,8 @@ app.post("/v1/repositories", async (req, reply) => {
   if (!principal.scopes.includes("repo:write")) {
     throw forbidden("This credential cannot create books.");
   }
-  const owner = auth.getUser(principal.userId)!;
+  const owner = await auth.getUser(principal.userId);
+  if (!owner) throw notFound("User");
   const body = z.object({
     title: z.string().min(1),
     slug: z.string().regex(/^[a-z0-9-]+$/),
@@ -148,18 +153,20 @@ app.post("/v1/repositories", async (req, reply) => {
     visibility: z.enum(["private", "unlisted", "public"]).default("private"),
   }).parse(req.body);
 
-  if (repos.find(owner.handle, body.slug)) {
+  if (await repos.find(owner.handle, body.slug)) {
     throw new GitLitError("conflict", 409, "Conflict", `You already have a book at ${body.slug}.`);
   }
 
   const id = newRepoId();
-  await gitd.createRepo(id);
-  const record = repos.create({ id, owner: owner.handle, ownerUserId: owner.id, ...body });
+  const { gitdir } = await gitd.createRepo(id);
+  const record = await repos.create({
+    id, ownerHandle: owner.handle, ownerUserId: owner.id, storagePath: gitdir, ...body,
+  });
 
   await gitd.commit(id, {
     ref: "refs/heads/main",
     message: `Create ${body.title}`,
-    author: committer(principal.userId),
+    author: await committer(principal.userId),
     newTextOrigin: "human_written",
     evidence: ["repo_created"],
     changes: [
@@ -175,7 +182,7 @@ app.post("/v1/repositories", async (req, reply) => {
 
 app.get("/v1/repositories/:owner/:slug", async (req) => {
   const { owner, slug } = req.params as { owner: string; slug: string };
-  const repo = mustFind(owner, slug);
+  const repo = await mustFind(owner, slug);
   requireAccess(req, repo, "repo:read");
   const tree = await gitd.tree(repo.id);
   return { ...repo, head: tree.head, files: tree.entries };
@@ -185,7 +192,7 @@ app.get("/v1/repositories/:owner/:slug", async (req) => {
 
 app.get("/v1/repositories/:owner/:slug/documents", async (req) => {
   const { owner, slug } = req.params as { owner: string; slug: string };
-  const repo = mustFind(owner, slug);
+  const repo = await mustFind(owner, slug);
   requireAccess(req, repo, "repo:read");
   const tree = await gitd.tree(repo.id);
   const chapters = tree.entries.filter((p) => p.startsWith("manuscript/chapters/"));
@@ -203,7 +210,7 @@ app.get("/v1/repositories/:owner/:slug/documents", async (req) => {
 
 app.get("/v1/repositories/:owner/:slug/documents/*", async (req) => {
   const { owner, slug, "*": path } = req.params as { owner: string; slug: string; "*": string };
-  const repo = mustFind(owner, slug);
+  const repo = await mustFind(owner, slug);
   requireAccess(req, repo, "repo:read");
   const q = z.object({ ref: z.string().default("refs/heads/main"), flow: z.coerce.boolean().default(false) }).parse(req.query);
   const { content } = await gitd.readBlob(repo.id, path, q.ref);
@@ -221,7 +228,7 @@ app.get("/v1/repositories/:owner/:slug/documents/*", async (req) => {
  */
 app.put("/v1/repositories/:owner/:slug/documents/*", async (req) => {
   const { owner, slug, "*": path } = req.params as { owner: string; slug: string; "*": string };
-  const repo = mustFind(owner, slug);
+  const repo = await mustFind(owner, slug);
   requireAccess(req, repo, "repo:write");
   const principal = requireUser(req);
   const body = z.object({
@@ -234,60 +241,60 @@ app.put("/v1/repositories/:owner/:slug/documents/*", async (req) => {
   // Evidence is derived from what we actually recorded for the session, not
   // from what the client asserts about itself.
   const session = body.authoringSessionId
-    ? authoringSessions.get(body.authoringSessionId)
+    ? await authoringSessions.get(body.authoringSessionId)
     : undefined;
   const evidence = session ? evidenceFor(session) : body.evidence;
 
   const result = await gitd.commit(repo.id, {
     ref: "refs/heads/main",
     message: body.message,
-    author: committer(principal.userId),
+    author: await committer(principal.userId),
     newTextOrigin: "human_written",
     evidence,
     changes: [{ path, content: body.content }],
   });
-  if (session) authoringSessions.attachCommit(session.id, result.sha);
-  repos.touch(repo.id);
+  if (session) await authoringSessions.attachCommit(session.id, result.sha);
+  await repos.touch(repo.id);
   return { ...result, evidence };
 });
 
 app.get("/v1/repositories/:owner/:slug/collaborators", async (req) => {
   const { owner, slug } = req.params as { owner: string; slug: string };
-  const repo = mustFind(owner, slug);
+  const repo = await mustFind(owner, slug);
   requireAccess(req, repo, "repo:read");
   return {
-    collaborators: repo.collaborators.map((c) => {
-      const user = auth.getUser(c.userId);
+    collaborators: await Promise.all(repo.collaborators.map(async (c) => {
+      const user = await auth.getUser(c.userId);
       return { userId: c.userId, handle: user?.handle, role: c.role };
-    }),
+    })),
   };
 });
 
 app.post("/v1/repositories/:owner/:slug/collaborators", async (req) => {
   const { owner, slug } = req.params as { owner: string; slug: string };
-  const repo = mustFind(owner, slug);
+  const repo = await mustFind(owner, slug);
   requireAccess(req, repo, "repo:admin");
   const body = z.object({
     handle: z.string(),
     role: z.enum(["co_author", "editor", "beta_reader", "verifier"]),
   }).parse(req.body);
 
-  const user = auth.findUserByHandle(body.handle);
+  const user = await auth.findUserByHandle(body.handle);
   if (!user) throw notFound(`User @${body.handle}`);
   if (user.id === repo.ownerUserId) {
     throw new GitLitError("conflict", 409, "Conflict", "The owner already has full access.");
   }
-  repos.addCollaborator(repo.id, user.id, body.role);
+  await repos.addCollaborator(repo.id, user.id, body.role);
   return { added: true, handle: user.handle, role: body.role };
 });
 
 app.delete("/v1/repositories/:owner/:slug/collaborators/:handle", async (req) => {
   const { owner, slug, handle } = req.params as Record<string, string>;
-  const repo = mustFind(owner!, slug!);
+  const repo = await mustFind(owner!, slug!);
   requireAccess(req, repo, "repo:admin");
-  const user = auth.findUserByHandle(handle!);
+  const user = await auth.findUserByHandle(handle!);
   if (!user) throw notFound(`User @${handle}`);
-  repos.removeCollaborator(repo.id, user.id);
+  await repos.removeCollaborator(repo.id, user.id);
   return { removed: true };
 });
 
@@ -301,7 +308,7 @@ app.delete("/v1/repositories/:owner/:slug/collaborators/:handle", async (req) =>
  */
 app.post("/v1/repositories/:owner/:slug/architecture", async (req) => {
   const { owner, slug } = req.params as { owner: string; slug: string };
-  const repo = mustFind(owner, slug);
+  const repo = await mustFind(owner, slug);
   requireAccess(req, repo, "agent:research");
   const principal = requireUser(req);
 
@@ -315,7 +322,7 @@ app.post("/v1/repositories/:owner/:slug/architecture", async (req) => {
 
   for (const change of body.changes) assertAgentWritable(change.path);
 
-  const user = auth.getUser(principal.userId)!;
+  const user = (await auth.getUser(principal.userId))!;
   const result = await gitd.commit(repo.id, {
     ref: "refs/heads/main",
     message: body.message,
@@ -330,7 +337,7 @@ app.post("/v1/repositories/:owner/:slug/architecture", async (req) => {
     evidence: body.evidence,
     changes: body.changes,
   });
-  repos.touch(repo.id);
+  await repos.touch(repo.id);
   return result;
 });
 
@@ -338,7 +345,7 @@ app.post("/v1/repositories/:owner/:slug/architecture", async (req) => {
 
 app.get("/v1/repositories/:owner/:slug/commits", async (req) => {
   const { owner, slug } = req.params as { owner: string; slug: string };
-  const repo = mustFind(owner, slug);
+  const repo = await mustFind(owner, slug);
   requireAccess(req, repo, "repo:read");
   const entries = await gitd.log(repo.id);
   return {
@@ -353,7 +360,7 @@ app.get("/v1/repositories/:owner/:slug/commits", async (req) => {
 
 app.get("/v1/repositories/:owner/:slug/diff", async (req) => {
   const { owner, slug } = req.params as { owner: string; slug: string };
-  const repo = mustFind(owner, slug);
+  const repo = await mustFind(owner, slug);
   requireAccess(req, repo, "repo:read");
   const q = z.object({ base: z.string(), head: z.string(), path: z.string() }).parse(req.query);
   const [base, head] = await Promise.all([
@@ -365,7 +372,7 @@ app.get("/v1/repositories/:owner/:slug/diff", async (req) => {
 
 app.get("/v1/repositories/:owner/:slug/provenance", async (req) => {
   const { owner, slug } = req.params as { owner: string; slug: string };
-  const repo = mustFind(owner, slug);
+  const repo = await mustFind(owner, slug);
   requireAccess(req, repo, "repo:provenance");
   const tree = await gitd.tree(repo.id);
   const sidecars = tree.entries.filter((p) => p.startsWith(".gitlit/provenance/"));
@@ -387,7 +394,7 @@ app.get("/v1/repositories/:owner/:slug/provenance", async (req) => {
  */
 app.post("/v1/repositories/:owner/:slug/sessions", async (req, reply) => {
   const { owner, slug } = req.params as { owner: string; slug: string };
-  const repo = mustFind(owner, slug);
+  const repo = await mustFind(owner, slug);
   requireAccess(req, repo, "repo:write");
   const principal = requireUser(req);
   const body = z.object({
@@ -395,7 +402,7 @@ app.post("/v1/repositories/:owner/:slug/sessions", async (req, reply) => {
     client: z.string().default("write_web"),
   }).parse(req.body);
 
-  const session = authoringSessions.open({
+  const session = await authoringSessions.open({
     repoId: repo.id, userId: principal.userId, path: body.path, client: body.client,
   });
   return reply.status(201).send({
@@ -425,10 +432,10 @@ app.patch("/v1/sessions/:id", async (req) => {
   }).parse(req.body);
 
   const principal = requireUser(req);
-  const existing = authoringSessions.get(id);
+  const existing = await authoringSessions.get(id);
   // Scoped to the owner: a session id must not let another user write into it.
   if (!existing || existing.userId !== principal.userId) throw notFound(`Authoring session ${id}`);
-  const session = authoringSessions.update(id, body);
+  const session = await authoringSessions.update(id, body);
   if (!session) throw notFound(`Authoring session ${id}`);
   return {
     sessionId: session.id,
@@ -441,8 +448,8 @@ app.patch("/v1/sessions/:id", async (req) => {
 app.post("/v1/sessions/:id/close", async (req) => {
   const { id } = req.params as { id: string };
   const principal = requireUser(req);
-  if (authoringSessions.get(id)?.userId !== principal.userId) throw notFound(`Authoring session ${id}`);
-  const session = authoringSessions.close(id);
+  if ((await authoringSessions.get(id))?.userId !== principal.userId) throw notFound(`Authoring session ${id}`);
+  const session = await authoringSessions.close(id);
   if (!session) throw notFound(`Authoring session ${id}`);
   return { sessionId: session.id, endedAt: session.endedAt, eventsRecorded: session.events.length };
 });
@@ -450,7 +457,7 @@ app.post("/v1/sessions/:id/close", async (req) => {
 app.get("/v1/sessions/:id", async (req) => {
   const { id } = req.params as { id: string };
   const principal = requireUser(req);
-  const session = authoringSessions.get(id);
+  const session = await authoringSessions.get(id);
   if (!session || session.userId !== principal.userId) throw notFound(`Authoring session ${id}`);
   return session;
 });
@@ -459,18 +466,18 @@ app.get("/v1/sessions/:id", async (req) => {
 app.patch("/v1/sessions/:id/events/:contentHash", async (req) => {
   const { id, contentHash } = req.params as { id: string; contentHash: string };
   const principal = requireUser(req);
-  if (authoringSessions.get(id)?.userId !== principal.userId) throw notFound(`Authoring session ${id}`);
+  if ((await authoringSessions.get(id))?.userId !== principal.userId) throw notFound(`Authoring session ${id}`);
   const body = z.object({ authorNote: z.string().min(1).max(500) }).parse(req.body);
-  const event = authoringSessions.annotate(id, contentHash, body.authorNote);
+  const event = await authoringSessions.annotate(id, contentHash, body.authorNote);
   if (!event) throw notFound(`Input event ${contentHash}`);
   return { recorded: true, event, note: "Stored as your account of this paste, not as an observation." };
 });
 
 app.get("/v1/repositories/:owner/:slug/sessions", async (req) => {
   const { owner, slug } = req.params as { owner: string; slug: string };
-  const repo = mustFind(owner, slug);
+  const repo = await mustFind(owner, slug);
   requireAccess(req, repo, "repo:provenance");
-  return { sessions: authoringSessions.forRepo(repo.id) };
+  return { sessions: await authoringSessions.forRepo(repo.id) };
 });
 
 if (process.env.NODE_ENV !== "test") {

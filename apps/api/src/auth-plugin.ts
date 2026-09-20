@@ -1,9 +1,18 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { AuthStore, authorize, type Capability, type Principal } from "@gitlit/auth";
+import { PgAuthStore, authorize, type Capability, type Principal } from "@gitlit/auth";
 import { forbidden, GitLitError } from "@gitlit/core";
-import type { RepoRecord } from "./store.js";
+import type { RepoRecord } from "./repos.js";
 
-export const auth = new AuthStore();
+import { db } from "./db.js";
+
+/** Lazily bound so the database is initialised before first use. */
+let store: PgAuthStore | null = null;
+export const auth = new Proxy({} as PgAuthStore, {
+  get(_t, prop) {
+    store ??= new PgAuthStore(db());
+    return Reflect.get(store, prop, store);
+  },
+});
 
 export const SESSION_COOKIE = "gitlit_session";
 
@@ -12,10 +21,10 @@ declare module "fastify" {
 }
 
 /** Bearer header first, then the session cookie. */
-export function resolvePrincipal(req: FastifyRequest): Principal | null {
+export async function resolvePrincipal(req: FastifyRequest): Promise<Principal | null> {
   const header = req.headers.authorization;
   if (header?.startsWith("Bearer ")) {
-    const p = auth.resolve(header.slice(7).trim());
+    const p = await auth.resolve(header.slice(7).trim());
     if (p) return p;
   }
   const cookie = req.headers.cookie

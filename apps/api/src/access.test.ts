@@ -23,10 +23,10 @@ const { auth } = await import("./auth-plugin.js");
 beforeAll(async () => { await app.ready(); });
 
 /** Sign a user in the way a real client would: magic link -> session token. */
-function signIn(email: string): { userId: string; session: string } {
-  const { token } = auth.issueMagicLink(email);
-  const result = auth.consumeMagicLink(token)!;
-  return { userId: result.user.id, session: result.sessionToken };
+async function signIn(email: string): Promise<{ userId: string; session: string; handle: string }> {
+  const { token } = await auth.issueMagicLink(email);
+  const result = (await auth.consumeMagicLink(token))!;
+  return { userId: result.user.id, session: result.sessionToken, handle: result.user.handle };
 }
 
 const bearer = (t: string) => ({ authorization: `Bearer ${t}` });
@@ -38,13 +38,13 @@ async function createBook(session: string, slug: string, visibility = "private")
   });
 }
 
-let mara: { userId: string; session: string };
-let stranger: { userId: string; session: string };
+let mara: { userId: string; session: string; handle: string };
+let stranger: { userId: string; session: string; handle: string };
 let n = 0;
 
-beforeEach(() => {
-  mara = signIn(`mara${n}@example.com`);
-  stranger = signIn(`stranger${n}@example.com`);
+beforeEach(async () => {
+  mara = await signIn(`mara${n}@example.com`);
+  stranger = await signIn(`stranger${n}@example.com`);
   n++;
 });
 
@@ -71,13 +71,13 @@ describe("authentication", () => {
   });
 
   it("rejects a reused magic link", async () => {
-    const { token } = auth.issueMagicLink("replay@example.com");
+    const { token } = await auth.issueMagicLink("replay@example.com");
     expect((await app.inject({ method: "POST", url: "/v1/auth/session", payload: { token } })).statusCode).toBe(200);
     expect((await app.inject({ method: "POST", url: "/v1/auth/session", payload: { token } })).statusCode).toBe(401);
   });
 
   it("sets an HttpOnly session cookie", async () => {
-    const { token } = auth.issueMagicLink("cookie@example.com");
+    const { token } = await auth.issueMagicLink("cookie@example.com");
     const res = await app.inject({ method: "POST", url: "/v1/auth/session", payload: { token } });
     expect(res.headers["set-cookie"]).toMatch(/HttpOnly/);
     expect(res.headers["set-cookie"]).toMatch(/SameSite=Lax/);
@@ -108,7 +108,7 @@ describe("private book access", () => {
   });
   const url = (owner: string, s: string, suffix = "") =>
     `/v1/repositories/${owner}/${s}${suffix}`;
-  const handle = () => auth.getUser(mara.userId)!.handle;
+  const handle = () => mara.handle;
 
   it("the owner can read it", async () => {
     const res = await app.inject({ method: "GET", url: url(handle(), slug), headers: bearer(mara.session) });
@@ -151,8 +151,8 @@ describe("private book access", () => {
 
 describe("collaborator roles", () => {
   let slug: string;
-  const handle = () => auth.getUser(mara.userId)!.handle;
-  const strangerHandle = () => auth.getUser(stranger.userId)!.handle;
+  const handle = () => mara.handle;
+  const strangerHandle = () => stranger.handle;
 
   beforeEach(async () => {
     slug = `collab${n}`;
@@ -225,7 +225,7 @@ describe("public books", () => {
   it("are readable anonymously but not writable", async () => {
     const slug = `open${n}`;
     await createBook(mara.session, slug, "public");
-    const handle = auth.getUser(mara.userId)!.handle;
+    const handle = mara.handle;
 
     expect((await app.inject({ method: "GET", url: `/v1/repositories/${handle}/${slug}` })).statusCode).toBe(200);
     const write = await app.inject({
@@ -241,7 +241,7 @@ describe("public books", () => {
   it("do not expose provenance anonymously", async () => {
     const slug = `open2${n}`;
     await createBook(mara.session, slug, "public");
-    const handle = auth.getUser(mara.userId)!.handle;
+    const handle = mara.handle;
     const res = await app.inject({ method: "GET", url: `/v1/repositories/${handle}/${slug}/provenance` });
     expect(res.statusCode).not.toBe(200);
     // 401, not 403: signing in as someone with access would succeed.
@@ -253,7 +253,7 @@ describe("api tokens", () => {
   it("a read-only token CANNOT write", async () => {
     const slug = `tok${n}`;
     await createBook(mara.session, slug);
-    const handle = auth.getUser(mara.userId)!.handle;
+    const handle = mara.handle;
 
     const made = await app.inject({
       method: "POST", url: "/v1/tokens", headers: bearer(mara.session),
@@ -321,7 +321,7 @@ describe("authoring sessions", () => {
   it("cannot be written into by another user", async () => {
     const slug = `sess${n}`;
     await createBook(mara.session, slug);
-    const handle = auth.getUser(mara.userId)!.handle;
+    const handle = mara.handle;
 
     const opened = await app.inject({
       method: "POST", url: `/v1/repositories/${handle}/${slug}/sessions`,
