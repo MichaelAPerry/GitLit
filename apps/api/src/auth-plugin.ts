@@ -18,6 +18,7 @@ export const auth = new Proxy({} as PgAuthStore, {
 });
 
 export const SESSION_COOKIE = "gitlit_session";
+export const OAUTH_STATE_COOKIE = "gitlit_oauth";
 
 /**
  * Provider credentials come from the environment and nowhere else. An
@@ -138,4 +139,51 @@ export function setSessionCookie(reply: FastifyReply, token: string): void {
 
 export function clearSessionCookie(reply: FastifyReply): void {
   reply.header("set-cookie", `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+}
+
+/**
+ * Add a Set-Cookie without discarding one already queued.
+ *
+ * `reply.header("set-cookie", …)` REPLACES, so the callback — which both
+ * starts the session and clears the one-time OAuth cookie — would otherwise
+ * emit only whichever it set last.
+ */
+function appendCookie(reply: FastifyReply, cookie: string): void {
+  const existing = reply.getHeader("set-cookie");
+  const all = existing === undefined ? [] : Array.isArray(existing) ? [...existing] : [String(existing)];
+  all.push(cookie);
+  reply.header("set-cookie", all);
+}
+
+/**
+ * Bind an OAuth attempt to the browser that started it (login-CSRF defence).
+ *
+ * Without this, an attacker completes a flow for THEIR OWN provider account,
+ * captures the resulting callback URL, and hands it to a victim — whose browser
+ * then signs in as the attacker. The victim writes their next chapter into an
+ * account the attacker controls and can read. Binding the state to a cookie
+ * set here, and requiring it back at the callback, means a callback opened in
+ * any other browser is rejected.
+ *
+ * SameSite=Lax (not Strict) is required: the callback is a top-level
+ * navigation arriving from the provider's domain, and Strict would withhold
+ * the cookie there and break every legitimate sign-in.
+ */
+export function setOAuthStateCookie(reply: FastifyReply, state: string): void {
+  const secure = process.env.NODE_ENV === "production";
+  appendCookie(reply,
+    `${OAUTH_STATE_COOKIE}=${encodeURIComponent(state)}; HttpOnly; SameSite=Lax; ` +
+    `Path=/v1/auth/oauth; Max-Age=600` + (secure ? "; Secure" : ""));
+}
+
+export function readOAuthStateCookie(req: FastifyRequest): string | null {
+  const raw = req.headers.cookie
+    ?.split(";").map((c) => c.trim())
+    .find((c) => c.startsWith(`${OAUTH_STATE_COOKIE}=`))
+    ?.slice(OAUTH_STATE_COOKIE.length + 1);
+  return raw ? decodeURIComponent(raw) : null;
+}
+
+export function clearOAuthStateCookie(reply: FastifyReply): void {
+  appendCookie(reply, `${OAUTH_STATE_COOKIE}=; HttpOnly; SameSite=Lax; Path=/v1/auth/oauth; Max-Age=0`);
 }

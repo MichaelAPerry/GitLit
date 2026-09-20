@@ -11,7 +11,8 @@ import { gitd } from "./gitd-client.js";
 import { initDb } from "./db.js";
 import {
   auth, clearSessionCookie, oauth, requireAccess, requireUser, resolvePrincipal,
-  setSessionCookie, PUBLIC_URL, WEB_URL,
+  setSessionCookie, setOAuthStateCookie, readOAuthStateCookie, clearOAuthStateCookie,
+  PUBLIC_URL, WEB_URL,
 } from "./auth-plugin.js";
 import { ALL_SCOPES, MAGIC_LINK_TTL_MS, OAuthError, authorize, type Scope } from "@gitlit/auth";
 import { createMailer } from "@gitlit/mail";
@@ -291,12 +292,14 @@ app.get("/v1/auth/oauth/:provider", async (req, reply) => {
   // `link` attaches a provider to the account already signed in here.
   const linkUserId = q.link ? requireUser(req).userId : undefined;
 
-  const { url } = await oauth.begin({
+  const { url, state } = await oauth.begin({
     provider,
     redirectUri: callbackUri(provider),
     returnTo: q.returnTo,
     linkUserId,
   });
+  // Bind this attempt to this browser; verified at the callback.
+  setOAuthStateCookie(reply, state);
   return reply.redirect(url, 302);
 });
 
@@ -323,6 +326,18 @@ app.get("/v1/auth/oauth/:provider/callback", async (req, reply) => {
       : q.error_description ?? q.error);
   }
   if (!q.code || !q.state) return fail("That sign-in link was incomplete. Please try again.");
+
+  /**
+   * Login-CSRF check: the state must match the one this browser was given at
+   * begin. A callback opened in a different browser — an attacker feeding a
+   * victim a URL for the attacker's own account — has no matching cookie and
+   * is refused before any code is exchanged.
+   */
+  const bound = readOAuthStateCookie(req);
+  clearOAuthStateCookie(reply);
+  if (!bound || bound !== q.state) {
+    return fail("That sign-in could not be verified for this browser. Please start again.");
+  }
 
   try {
     const result = await oauth.complete({

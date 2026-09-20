@@ -54,6 +54,35 @@ gitd already sent the service token and used only the repo id. **Fix:** require
 the token (constant-time compare), and drop `storagePath` from the response
 entirely. Tests in `apps/api/src/access.test.ts`.
 
+### OAuth: audience unchecked, and no browser binding (medium, fixed)
+
+OAuth was the sharpest area to probe, so it got the closest read. The identity
+rule is sound — an unverified provider email never reaches an existing account,
+GitHub's verified address comes from `/user/emails` (not the spoofable `/user`
+primary), state is single-use, provider-bound and expiring, PKCE and the OIDC
+nonce are present, and `returnTo` is confined to a same-origin path (fuzzed
+with ~20 open-redirect payloads — none escaped, which matters because the
+callback appends the session token to that redirect). Two real gaps under it:
+
+- **Google's id_token had no `aud` (audience) check.** OIDC Core §3.1.3.7 makes
+  this a MUST. A valid Google token — real verified email, correct issuer —
+  minted for *any other* Google application would have been accepted here and
+  signed its holder in as that email's owner. Compensated in practice by the
+  server-side code exchange and the nonce, but that is a fragile backstop for
+  an auth path. Now the `aud` must contain our client_id, and `azp`, when
+  present, must equal it.
+
+- **OAuth state was not bound to the initiating browser** — login-CSRF. An
+  attacker completes a flow for their own provider account, hands the victim
+  the resulting callback URL, and the victim's browser signs in *as the
+  attacker*; the victim then writes their next chapter into an account the
+  attacker owns and can read. Now `begin` sets a one-time `SameSite=Lax`
+  cookie holding the state, and the callback refuses any state that does not
+  match it — a callback opened in a different browser has no matching cookie.
+
+Regression tests: `packages/auth/src/oauth.test.ts` (aud/azp),
+`apps/api/src/oauth-csrf.test.ts` (browser binding).
+
 ## Held up under probing
 
 - **Cross-account access (IDOR).** A signed-in stranger, and an anonymous

@@ -44,7 +44,18 @@ export interface Provider {
   scopes: string[];
   /** OIDC providers return an id_token whose nonce must match the request. */
   usesNonce: boolean;
-  fetchProfile(http: HttpClient, tokens: TokenResponse, expectedNonce: string): Promise<OAuthProfile>;
+  /**
+   * `expectedAudience` is this GitLit deployment's own client_id. An OIDC
+   * provider MUST have its id_token's `aud` claim checked against it
+   * (OIDC Core §3.1.3.7): a token minted for a *different* application is a
+   * valid Google token with a real, verified email, and without this check it
+   * would sign that person in here. The GitHub adapter ignores the argument —
+   * it reads the profile from an access-token-scoped API call, not a token
+   * whose audience could differ.
+   */
+  fetchProfile(
+    http: HttpClient, tokens: TokenResponse, expectedNonce: string, expectedAudience: string,
+  ): Promise<OAuthProfile>;
 }
 
 export interface TokenResponse {
@@ -73,7 +84,7 @@ const github: Provider = {
   scopes: ["read:user", "user:email"],
   usesNonce: false,
 
-  async fetchProfile(http, tokens) {
+  async fetchProfile(http, tokens, _nonce, _audience) {
     const token = tokens.access_token;
     if (!token) throw new OAuthError("no_access_token", "GitHub returned no access token.");
 
@@ -121,7 +132,7 @@ const google: Provider = {
   scopes: ["openid", "email", "profile"],
   usesNonce: true,
 
-  async fetchProfile(_http, tokens, expectedNonce) {
+  async fetchProfile(_http, tokens, expectedNonce, expectedAudience) {
     const idToken = tokens.id_token;
     if (!idToken) throw new OAuthError("no_id_token", "Google returned no id_token.");
 
@@ -143,6 +154,26 @@ const google: Provider = {
     }
     if (claims["nonce"] !== expectedNonce) {
       throw new OAuthError("nonce_mismatch", "The id_token does not match this sign-in attempt.");
+    }
+    /**
+     * The audience MUST be this deployment's own client_id. `aud` may be a
+     * string or an array (OIDC allows multiple audiences); either way our
+     * client_id has to be in it. Without this, an id_token Google minted for
+     * ANY other application — trivial to obtain — would be accepted here with
+     * its real verified email, and the holder signed in as that user.
+     */
+    const aud = claims["aud"];
+    const audiences = Array.isArray(aud) ? aud.map(String) : [String(aud ?? "")];
+    if (!expectedAudience || !audiences.includes(expectedAudience)) {
+      throw new OAuthError("bad_audience", "The id_token was not issued for this application.");
+    }
+    /**
+     * `azp` (authorized party): when present, it MUST equal our client_id.
+     * This blocks a token whose `aud` legitimately lists several parties but
+     * was authorized for a different one.
+     */
+    if (claims["azp"] !== undefined && String(claims["azp"]) !== expectedAudience) {
+      throw new OAuthError("bad_azp", "The id_token was authorized for a different application.");
     }
     if (!claims["sub"]) throw new OAuthError("no_subject", "Google's id_token carries no subject.");
 

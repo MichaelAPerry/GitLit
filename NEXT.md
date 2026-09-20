@@ -10,7 +10,7 @@ How to run it and what each package does: [`README.md`](./README.md).
 
 ## 1. State
 
-738 tests across 14 packages. `pnpm typecheck` clean across 22 tasks.
+749 tests across 14 packages. `pnpm typecheck` clean across 22 tasks.
 
 The product works end to end and has been driven against live services, not
 just asserted in tests:
@@ -270,8 +270,15 @@ exploitable holes, both closed with regression tests:
   repo's on-disk path to anyone, plus an existence oracle. Now service-token
   gated, and the path is gone from the response.
 
+A follow-up pass on OAuth specifically (the area of most concern) fixed two
+more: Google id_tokens had no `aud` check (OIDC MUST — a token minted for any
+other Google app would have signed its holder in), and OAuth state was not
+bound to the initiating browser (login-CSRF — a victim could be signed into an
+attacker's account). Both closed with regression tests.
+
 Held up: cross-account access (404, not 403), every route guarded, CORS,
-per-user MCP identity, authoring-session ownership.
+per-user MCP identity, authoring-session ownership, PKCE, the OIDC nonce,
+GitHub's verified-email handling, and returnTo (fuzzed, no open redirect).
 
 **Recorded, not fixed:** offline verification has no trust anchor, so a clone
 an attacker rebuilds wholesale with their own key still verifies. That is what

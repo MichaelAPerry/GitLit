@@ -16,13 +16,13 @@ Phases 0–2 of the build order (§15).
 | `packages/diff` | Sentence diff, move detection, plan-to-prose derivation (§9) | 45 tests |
 | `packages/embed` | Pinned local embedding model (§2.7) | 24 tests |
 | `packages/provenance` | Spans, trailers, signed receipt chain (§7) | 28 tests |
-| `packages/auth` | Credentials, roles, OAuth, the authorization decision | 136 tests |
+| `packages/auth` | Credentials, roles, OAuth, the authorization decision | 140 tests |
 | `packages/db` | Drizzle schema for §11, migrations, PGlite test harness | 16 tests |
 | `packages/mail` | Sign-in email, Resend transport, the production guard | 24 tests |
 | `packages/observability` | Error monitoring, and what may never leave the process | 51 tests |
 | `packages/preflight` | Checks a running deployment for the silent failures | 29 tests |
 | `apps/gitd` | The commit path, backups, offline verification (§5, §7.4) | 83 tests |
-| `apps/api` | REST surface (§12), authorization enforcement, rate limits | 86 tests |
+| `apps/api` | REST surface (§12), authorization enforcement, rate limits | 91 tests |
 | `apps/web` | Dashboard, GitLit Write, Provenance Diff Viewer | 79 tests + 4 in-browser |
 | `apps/mcp` | MCP server — how the AI Researcher executes (§8) | 73 tests |
 
@@ -54,7 +54,7 @@ Then open http://localhost:3000.
 ## Checks
 
 ```bash
-pnpm test        # 738 tests
+pnpm test        # 749 tests
 pnpm typecheck
 pnpm --filter @gitlit/web test:e2e   # 4 real-browser tests
 ```

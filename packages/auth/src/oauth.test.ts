@@ -368,6 +368,7 @@ describe("google id_token", () => {
   const valid = {
     iss: "https://accounts.google.com",
     sub: "google-user-1",
+    aud: "gg-client",
     email: "mara@example.com",
     email_verified: true,
     exp: Math.floor(Date.now() / 1000) + 3600,
@@ -400,6 +401,30 @@ describe("google id_token", () => {
   it("refuses an unverified Google address", async () => {
     await expect(googleFlow({ ...valid, email_verified: false }))
       .rejects.toThrow(/has not verified/);
+  });
+
+  it("REJECTS A TOKEN MINTED FOR ANOTHER APP (aud mismatch)", async () => {
+    // A valid Google token — real, verified email, good issuer and nonce — but
+    // issued to someone else's client_id. Without the aud check this signs the
+    // holder in as mara@example.com. OIDC §3.1.3.7 makes this a MUST.
+    await expect(googleFlow({ ...valid, aud: "some-other-app.apps.googleusercontent.com" }))
+      .rejects.toThrow(/not issued for this application/);
+  });
+
+  it("rejects a missing audience outright", async () => {
+    const { aud, ...noAud } = valid;
+    void aud;
+    await expect(googleFlow(noAud)).rejects.toThrow(/not issued for this application/);
+  });
+
+  it("accepts an aud array that contains our client_id", async () => {
+    expect((await googleFlow({ ...valid, aud: ["gg-client", "other"] })).user.email)
+      .toBe("mara@example.com");
+  });
+
+  it("rejects when azp names a different application", async () => {
+    await expect(googleFlow({ ...valid, aud: ["gg-client", "other"], azp: "other" }))
+      .rejects.toThrow(/authorized for a different application/);
   });
 
   it("rejects a malformed token rather than trusting it", () => {

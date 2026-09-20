@@ -153,7 +153,7 @@ export class OAuthService {
       throw new OAuthError("token_exchange_failed", String(tokens["error_description"] ?? tokens["error"]));
     }
 
-    const profile = await provider.fetchProfile(this.http, tokens, state.nonce);
+    const profile = await provider.fetchProfile(this.http, tokens, state.nonce, config.clientId);
     const resolved = await this.resolveIdentity(provider.id, profile, state.linkUserId ?? undefined);
 
     return {
