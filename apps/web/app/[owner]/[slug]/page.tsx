@@ -56,6 +56,12 @@ export default async function BookPage({ params }: { params: Promise<{ owner: st
             </>
           )}
 
+          <p style={{ marginTop: 20 }}>
+            <Link href={`/${owner}/${slug}/compare`} className="btn secondary">
+              Compare the plan with the prose
+            </Link>
+          </p>
+
           <h2 style={{ fontFamily: "var(--serif)", fontSize: "1.1rem", marginTop: 34 }}>Prose timeline</h2>
           <ProseTimeline commits={history.commits} />
         </div>

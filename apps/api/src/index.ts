@@ -2,8 +2,11 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { z } from "zod";
 import { GitLitError, assertAgentWritable, forbidden, newRepoId, notFound } from "@gitlit/core";
-import { diffProse } from "@gitlit/diff";
-import { countWords, denormalize } from "@gitlit/prose";
+import {
+  beatsForChapter, chapterIdForPath, diffPlanToProse, diffProse, paragraphsOf,
+  DERIVATION_ALGO_VERSION,
+} from "@gitlit/diff";
+import { countWords, denormalize, parseArchitecture } from "@gitlit/prose";
 import { gitd } from "./gitd-client.js";
 import { initDb } from "./db.js";
 import {
@@ -404,6 +407,127 @@ app.get("/v1/repositories/:owner/:slug/diff", async (req) => {
     gitd.readBlob(repo.id, q.path, q.head),
   ]);
   return diffProse(base.content ?? "", head.content ?? "");
+});
+
+/**
+ * Mode A — Plan vs. Prose (§9.1). The flagship view.
+ *
+ * Compares a chapter against the beats planned for it in
+ * manuscript_architecture.md, and reports where the prose followed the plan,
+ * grew it, left it, or was never in it at all.
+ */
+app.get("/v1/repositories/:owner/:slug/diff/plan", async (req) => {
+  const { owner, slug } = req.params as { owner: string; slug: string };
+  const repo = await mustFind(owner, slug);
+  requireAccess(req, repo, "repo:read");
+  const q = z.object({
+    path: z.string(),
+    ref: z.string().default("refs/heads/main"),
+    chapter: z.string().optional(),
+  }).parse(req.query);
+
+  const [chapter, architecture] = await Promise.all([
+    gitd.readBlob(repo.id, q.path, q.ref),
+    gitd.readBlob(repo.id, "manuscript_architecture.md", q.ref),
+  ]);
+  if (chapter.content === null) throw notFound(q.path);
+
+  if (architecture.content === null) {
+    return {
+      path: q.path,
+      hasPlan: false,
+      note: "This book has no manuscript_architecture.md, so there is no plan to compare against. " +
+            "Every word is the author's own by default, not by measurement.",
+    };
+  }
+
+  const parsed = parseArchitecture(architecture.content);
+  const chapterId = q.chapter ?? chapterIdForPath(q.path);
+  const beats = chapterId ? beatsForChapter(parsed.beats, chapterId) : parsed.beats;
+  const paragraphs = paragraphsOf(chapter.content);
+  const result = diffPlanToProse(beats, paragraphs);
+
+  return {
+    path: q.path,
+    hasPlan: true,
+    chapterId,
+    beats,
+    paragraphs,
+    ...result,
+    caveat: "Derivation is computed from declared links and lexical overlap, deterministically, " +
+            "so anyone with a clone can reproduce it offline. It measures textual descent from " +
+            "the plan, not literary quality or effort.",
+  };
+});
+
+/** The headline divergence metric across the whole manuscript (§9.1). */
+app.get("/v1/repositories/:owner/:slug/divergence", async (req) => {
+  const { owner, slug } = req.params as { owner: string; slug: string };
+  const repo = await mustFind(owner, slug);
+  requireAccess(req, repo, "repo:provenance");
+  const q = z.object({ ref: z.string().default("refs/heads/main") }).parse(req.query);
+
+  const [tree, architecture] = await Promise.all([
+    gitd.tree(repo.id, q.ref),
+    gitd.readBlob(repo.id, "manuscript_architecture.md", q.ref),
+  ]);
+  if (architecture.content === null) return { hasPlan: false, chapters: [] };
+
+  const parsed = parseArchitecture(architecture.content);
+  const chapterPaths = tree.entries.filter((p) => p.startsWith("manuscript/chapters/"));
+
+  const chapters = await Promise.all(chapterPaths.map(async (path) => {
+    const { content } = await gitd.readBlob(repo.id, path, q.ref);
+    const chapterId = chapterIdForPath(path);
+    const beats = chapterId ? beatsForChapter(parsed.beats, chapterId) : [];
+    const result = diffPlanToProse(beats, paragraphsOf(content ?? ""));
+    return { path, chapterId, divergence: result.divergence, counts: result.counts };
+  }));
+
+  const totals = chapters.reduce((acc, c) => ({
+    departedWords: acc.departedWords + c.divergence.departedWords,
+    unplannedWords: acc.unplannedWords + c.divergence.unplannedWords,
+    plannedWords: acc.plannedWords + c.divergence.plannedWords,
+    totalWords: acc.totalWords + c.divergence.totalWords,
+  }), { departedWords: 0, unplannedWords: 0, plannedWords: 0, totalWords: 0 });
+
+  return {
+    hasPlan: true,
+    chapters,
+    divergence: {
+      ...totals,
+      score: totals.totalWords === 0
+        ? 0
+        : Number(((totals.departedWords + totals.unplannedWords) / totals.totalWords).toFixed(4)),
+    },
+    algoVersion: DERIVATION_ALGO_VERSION,
+  };
+});
+
+/** Mode B — provenance heat for one file: spans as committed (§9.2). */
+app.get("/v1/repositories/:owner/:slug/provenance/*", async (req) => {
+  const { owner, slug, "*": path } = req.params as { owner: string; slug: string; "*": string };
+  const repo = await mustFind(owner, slug);
+  requireAccess(req, repo, "repo:provenance");
+  const q = z.object({ ref: z.string().default("refs/heads/main") }).parse(req.query);
+
+  const [file, sidecar] = await Promise.all([
+    gitd.readBlob(repo.id, path, q.ref),
+    gitd.readBlob(repo.id, `.gitlit/provenance/${path}.jsonl`, q.ref),
+  ]);
+  if (file.content === null) throw notFound(path);
+
+  const spans = (sidecar.content ?? "")
+    .split("\n").filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+  return {
+    path,
+    content: file.content,
+    spans,
+    caveat: "Spans record what GitLit observed. Text marked as written here could have been " +
+            "composed elsewhere and retyped; the record is evidence, not proof.",
+  };
 });
 
 app.get("/v1/repositories/:owner/:slug/provenance", async (req) => {

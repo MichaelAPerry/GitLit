@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Composer } from "./Composer";
 
 /**
@@ -52,14 +52,21 @@ const renderComposer = (content = "") =>
   render(<Composer owner="mara" slug="saltmarsh" path="manuscript/chapters/01.md" initialContent={content} />);
 
 beforeEach(() => {
-  vi.useFakeTimers({ shouldAdvanceTime: true });
   calls.length = 0;
   localStorage.setItem("gitlit_session", "gls_testsession");
 });
-afterEach(() => {
-  vi.useRealTimers();
-  localStorage.clear();
-});
+afterEach(() => { localStorage.clear(); });
+
+/**
+ * Fake timers are used ONLY where the autosave debounce is what is under test.
+ * Recording a paste hashes it first, and that digest resolves on the microtask
+ * queue rather than on a timer, so a faked clock races it — the panel tests
+ * below simply wait for the real thing.
+ */
+function useFakeClock() {
+  beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); });
+  afterEach(() => { vi.useRealTimers(); });
+}
 
 describe("rendering", () => {
   it("shows the initial content and its word count", () => {
@@ -84,6 +91,8 @@ describe("rendering", () => {
 });
 
 describe("saving", () => {
+  useFakeClock();
+
   it("does not save an untouched document", async () => {
     mockApi();
     renderComposer("Already written.");
@@ -209,10 +218,9 @@ describe("the session record panel", () => {
     mockApi();
     renderComposer();
     await act(async () => { paste(screen.getByRole("textbox"), LONG); });
-    await settle(10);
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Session record/ })); });
 
-    expect(screen.getByText(/1 paste of/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/1 paste of/)).toBeInTheDocument());
     const panel = screen.getByText(/Pasting is normal/);
     expect(panel).toBeInTheDocument();
     expect(panel.textContent).toMatch(/recorded as a fact, not a suspicion/);
@@ -224,8 +232,8 @@ describe("the session record panel", () => {
     mockApi();
     renderComposer();
     await act(async () => { paste(screen.getByRole("textbox"), LONG); });
-    await settle(10);
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Session record/ })); });
+    await waitFor(() => expect(screen.getByText(/1 paste of/)).toBeInTheDocument());
     const text = document.body.textContent ?? "";
     for (const word of ["suspicious", "cheat", "violation", "detected", "flagged"]) {
       expect(text.toLowerCase(), word).not.toContain(word);

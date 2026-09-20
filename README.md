@@ -13,13 +13,13 @@ Phases 0–2 of the build order (§15).
 |---|---|---|
 | `packages/core` | Domain types, ULIDs, path allowlist (§8.3) | via consumers |
 | `packages/prose` | Prose normalizer — one sentence per line (§2.2) | 21 tests |
-| `packages/diff` | Sentence diff, move detection, word runs (§9.3) | 18 tests |
+| `packages/diff` | Sentence diff, move detection, plan-to-prose derivation (§9) | 45 tests |
 | `packages/provenance` | Spans, trailers, signed receipt chain (§7) | 28 tests |
 | `packages/auth` | Credentials, roles, the authorization decision | 94 tests |
 | `packages/db` | Drizzle schema for §11, migrations, PGlite test harness | 13 tests |
 | `apps/gitd` | The commit path — the only writer of provenance (§5) | 16 tests |
 | `apps/api` | REST surface (§12), authorization enforcement | 43 tests |
-| `apps/web` | Dashboard + GitLit Write (§7.5) | 50 tests + 4 in-browser |
+| `apps/web` | Dashboard, GitLit Write, Provenance Diff Viewer | 67 tests + 4 in-browser |
 | `apps/mcp` | MCP server — how the AI Researcher executes (§8) | 55 tests |
 
 ## Two properties worth knowing before reading the code
@@ -50,7 +50,7 @@ Then open http://localhost:3000.
 ## Checks
 
 ```bash
-pnpm test        # 391 tests
+pnpm test        # 425 tests
 pnpm typecheck
 pnpm --filter @gitlit/web test:e2e   # 4 real-browser tests
 ```
@@ -85,6 +85,39 @@ Embeddings are stored as `real[]` rather than pgvector's `vector(384)` for now:
 nothing reads or writes one yet (§2.7 — the pinned local model is Phase 5), and
 a portable type keeps the whole schema runnable under PGlite. Adding pgvector
 later is one `ALTER` per column plus the HNSW index; the data shape is unchanged.
+
+## The Provenance Diff Viewer
+
+Three readings of the same history, at `/<owner>/<slug>/compare`.
+
+**Plan vs. prose** (§9.1) compares a chapter against the beats planned for it
+and classifies each paragraph: `faithful`, `developed`, `departed`, or
+`unplanned` — plus `abandoned` for beats nothing realised. The headline
+**divergence** figure is the share of prose, by word count, that left the plan
+or was never in it.
+
+Two deliberate departures from the architecture sketch, both because the
+sketch would have produced misleading numbers:
+
+- **Not a one-to-one assignment.** The sketch proposed Hungarian matching.
+  Prose does not map to an outline one-for-one — a single beat is often
+  realised across three paragraphs — and a bijection would mark two of them
+  `unplanned`, inflating divergence with an artefact of the matching rather
+  than of the writing. Each side takes its best partner independently.
+- **Expansion is scored separately from retention.** Containment asks how much
+  of the *beat* survives, so a beat quoted verbatim plus three added sentences
+  still scores ~1.0. Without a length signal, `developed` could essentially
+  never fire for the most common way an author grows an outline.
+
+**Who wrote what** (§9.2) renders the chapter as continuous prose, underlined
+by what GitLit observed. `imported` and `unknown` get a dotted rule rather
+than being folded into "written here".
+
+**Revisions** (§9.3) is commit-to-commit at sentence level, with word-level
+detail inside a changed sentence and moves reported as moves.
+
+All of it is deterministic and local (§2.7) — declared links and lexical
+overlap only, so the numbers reproduce offline from a clone.
 
 ## Git access
 

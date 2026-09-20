@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useInputProvenance } from "./input-provenance";
 
 /**
@@ -49,11 +49,19 @@ function paste(el: Element, text: string) {
 }
 
 /**
- * Recording is async — the digest is computed before the event is stored — so
- * the queue has to drain before the record is observable.
+ * Recording is async: the digest is computed before the event is stored, and
+ * `crypto.subtle.digest` may take more than one tick. Poll for the observable
+ * state rather than guessing how long it needs — a fixed flush is a race that
+ * only shows up under load.
  */
 async function flush() {
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+}
+
+async function waitForEvents(
+  read: () => unknown[], count: number,
+): Promise<void> {
+  await waitFor(() => { expect(read()).toHaveLength(count); }, { timeout: 2000 });
 }
 
 function drop(el: Element, text: string) {
@@ -66,24 +74,23 @@ describe("paste", () => {
   it("records a large paste as an event", async () => {
     const { editor, events } = setup();
     await act(async () => { paste(editor, LONG); });
-    await flush();
-    expect(events()).toHaveLength(1);
+    await waitForEvents(events, 1);
     expect(events()[0].inputMode).toBe("pasted");
   });
 
   it("counts a small paste in the aggregates but creates no event row", async () => {
     const { editor, events, aggregates } = setup();
     await act(async () => { paste(editor, SHORT); });
-    await flush();
+    // Aggregated immediately; only the event row is gated on the threshold.
+    await waitFor(() => expect(aggregates().modeWords.pasted).toBe(3));
     expect(events()).toHaveLength(0);
-    expect(aggregates().modeWords.pasted).toBe(3);
   });
 
   it("STORES A HASH, NEVER THE TEXT", async () => {
     const { editor, events } = setup();
     const secret = "Mara counted the winters on the drive up to the headland. ".repeat(6);
     await act(async () => { paste(editor, secret); });
-    await flush();
+    await waitForEvents(events, 1);
 
     const recorded = JSON.stringify(events());
     expect(recorded).not.toContain("Mara");
@@ -94,7 +101,7 @@ describe("paste", () => {
   it("records size and word count so the author can see what was noted", async () => {
     const { editor, events } = setup();
     await act(async () => { paste(editor, LONG); });
-    await flush();
+    await waitForEvents(events, 1);
     expect(events()[0].charCount).toBe(LONG.length);
     expect(events()[0].wordCount).toBeGreaterThan(50);
   });
@@ -102,10 +109,11 @@ describe("paste", () => {
   it("hashes different pastes differently and identical pastes the same", async () => {
     const { editor, events } = setup();
     await act(async () => { paste(editor, LONG); });
-    await flush();
+    await waitForEvents(events, 1);
     await act(async () => { paste(editor, LONG.replace("lighthouse", "beacon")); });
+    await waitForEvents(events, 2);
     await act(async () => { paste(editor, LONG); });
-    await flush();
+    await waitForEvents(events, 3);
     const hashes = events().map((e: { contentHash: string }) => e.contentHash);
     expect(hashes[0]).toBe(hashes[2]);
     expect(hashes[0]).not.toBe(hashes[1]);
@@ -116,7 +124,7 @@ describe("other input modes", () => {
   it("records a drop as 'dropped', not as a paste", async () => {
     const { editor, events } = setup();
     await act(async () => { drop(editor, LONG); });
-    await flush();
+    await waitForEvents(events, 1);
     expect(events()[0].inputMode).toBe("dropped");
   });
 
@@ -210,7 +218,7 @@ describe("untrusted input", () => {
   it("records trust on the event so the server can weigh it", async () => {
     const { editor, events } = setup();
     await act(async () => { paste(editor, LONG); });
-    await flush();
+    await waitForEvents(events, 1);
     expect(events()[0]).toHaveProperty("isTrusted");
   });
 });
@@ -232,8 +240,7 @@ describe("resilience", () => {
     try {
       const { editor, events } = setup();
       await act(async () => { paste(editor, LONG); });
-    await flush();
-      expect(events()).toHaveLength(1);
+      await waitForEvents(events, 1);
       expect(events()[0].contentHash).toMatch(/^len:/);
     } finally {
       Object.defineProperty(globalThis.crypto, "subtle", { value: subtle, configurable: true });
@@ -254,10 +261,9 @@ describe("concurrent insertions", () => {
       paste(editor, b);
       paste(editor, a);
     });
-    await flush();
+    await waitForEvents(events, 3);
 
     const recorded = events();
-    expect(recorded).toHaveLength(3);
     expect(recorded[0].contentHash).toBe(recorded[2].contentHash);
     expect(recorded[0].contentHash).not.toBe(recorded[1].contentHash);
     expect(recorded.every((e: { contentHash: string }) => /^[0-9a-f]{64}$/.test(e.contentHash))).toBe(true);
@@ -266,7 +272,7 @@ describe("concurrent insertions", () => {
   it("never leaves a placeholder in the record", async () => {
     const { editor, events } = setup();
     await act(async () => { paste(editor, LONG); paste(editor, LONG + "x"); });
-    await flush();
+    await waitForEvents(events, 2);
     expect(JSON.stringify(events())).not.toContain("pending");
   });
 });

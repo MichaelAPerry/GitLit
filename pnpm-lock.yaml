@@ -121,6 +121,12 @@ importers:
       '@gitlit/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@gitlit/diff':
+        specifier: workspace:*
+        version: link:../../packages/diff
+      '@gitlit/prose':
+        specifier: workspace:*
+        version: link:../../packages/prose
       next:
         specifier: ^15.1.3
         version: 15.5.25(@babel/core@7.29.7)(@playwright/test@1.63.0)(@types/node@22.20.4)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
