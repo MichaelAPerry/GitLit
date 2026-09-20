@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import git from "isomorphic-git";
 import { normalizePath } from "@gitlit/core";
+import { installHooks } from "./hooks.js";
 
 export interface RepoRef { gitdir: string }
 
@@ -15,6 +16,7 @@ export function repoPath(root: string, repoId: string): string {
 export async function initRepo(gitdir: string, defaultBranch = "main"): Promise<void> {
   await fs.promises.mkdir(gitdir, { recursive: true });
   await git.init({ fs, bare: true, gitdir, defaultBranch });
+  installHooks(gitdir);
 }
 
 export async function resolveHead(gitdir: string, ref: string): Promise<string | null> {

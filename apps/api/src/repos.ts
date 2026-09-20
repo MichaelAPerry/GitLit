@@ -14,6 +14,7 @@ export interface RepoRecord {
   targetWords?: number;
   phase: string;
   visibility: Visibility;
+  storagePath: string;
   collaborators: { userId: string; role: RepoRole }[];
   createdAt: string;
   updatedAt: string;
@@ -33,6 +34,7 @@ function toRecord(row: Row, ownerHandle: string, collaborators: { userId: string
     targetWords: row.targetWords ?? undefined,
     phase: row.phase,
     visibility: row.visibility as Visibility,
+    storagePath: row.storagePath,
     collaborators,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

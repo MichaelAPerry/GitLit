@@ -9,7 +9,7 @@ import { initDb } from "./db.js";
 import {
   auth, clearSessionCookie, requireAccess, requireUser, resolvePrincipal, setSessionCookie,
 } from "./auth-plugin.js";
-import { ALL_SCOPES, type Scope } from "@gitlit/auth";
+import { ALL_SCOPES, authorize, type Scope } from "@gitlit/auth";
 import { repos, type RepoRecord } from "./repos.js";
 import { authoringSessions, evidenceFor } from "./sessions.js";
 
@@ -341,6 +341,42 @@ app.post("/v1/repositories/:owner/:slug/architecture", async (req) => {
   return result;
 });
 
+/**
+ * Internal: authorize a Git transport request (§12.7).
+ *
+ * gitd owns the repository volume and speaks the Git protocol, but must not
+ * own authorization too — that lives here, so the same authorize() decision
+ * covers a browser request and a `git push`. Service-token protected.
+ */
+app.post("/v1/internal/git-access", async (req) => {
+  const body = z.object({
+    owner: z.string(),
+    slug: z.string(),
+    capability: z.enum(["repo:read", "repo:write"]),
+    credential: z.string().optional(),
+  }).parse(req.body);
+
+  const repo = await repos.find(body.owner, body.slug);
+  if (!repo) return { allowed: false, reason: "not_found" };
+
+  const principal = body.credential ? await auth.resolve(body.credential) : null;
+  const decision = authorize({
+    principal,
+    capability: body.capability,
+    repo: { id: repo.id, ownerUserId: repo.ownerUserId, visibility: repo.visibility },
+    collaborators: repo.collaborators,
+  });
+
+  return {
+    allowed: decision.allowed,
+    reason: decision.reason,
+    authenticated: principal !== null,
+    repoId: repo.id,
+    storagePath: repo.storagePath,
+    userId: principal?.userId,
+  };
+});
+
 // -------------------------------------------------------- history & diffs
 
 app.get("/v1/repositories/:owner/:slug/commits", async (req) => {
@@ -480,7 +516,8 @@ app.get("/v1/repositories/:owner/:slug/sessions", async (req) => {
   return { sessions: await authoringSessions.forRepo(repo.id) };
 });
 
-if (process.env.NODE_ENV !== "test") {
+// Tests drive the app with `inject` and must not bind a port.
+if (process.env.GITLIT_NO_LISTEN !== "1" && process.env.VITEST !== "true") {
   const port = Number(process.env.API_PORT ?? 4000);
   app.listen({ port, host: "0.0.0.0" }).catch((e) => { app.log.error(e); process.exit(1); });
 }

@@ -21,6 +21,18 @@ export async function createTestDb() {
   return { db, client, close: () => client.close() };
 }
 
+/**
+ * A persistent local database for development without Docker. Same Postgres,
+ * same migrations, backed by a directory instead of memory.
+ */
+export async function createDevDb(dir: string) {
+  const client = new PGlite(dir);
+  const db = drizzle(client, { schema });
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  await migrate(db, { migrationsFolder: path.resolve(here, "../migrations") });
+  return { db, client, close: () => client.close() };
+}
+
 export type TestDb = Awaited<ReturnType<typeof createTestDb>>["db"];
 
 /**

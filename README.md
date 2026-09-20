@@ -50,7 +50,7 @@ Then open http://localhost:3000.
 ## Checks
 
 ```bash
-pnpm test        # 315 tests
+pnpm test        # 341 tests
 pnpm typecheck
 ```
 
@@ -79,6 +79,42 @@ Embeddings are stored as `real[]` rather than pgvector's `vector(384)` for now:
 nothing reads or writes one yet (§2.7 — the pinned local model is Phase 5), and
 a portable type keeps the whole schema runnable under PGlite. Adding pgvector
 later is one `ALTER` per column plus the HNSW index; the data shape is unchanged.
+
+## Git access
+
+Every GitLit book is a real Git repository and you can clone it:
+
+```bash
+git clone http://x:<your-api-token>@localhost:4001/<owner>/<slug>.git
+```
+
+The protocol is handled by git's own `upload-pack` and `receive-pack` in
+`--stateless-rpc` mode, the same approach Gitea and GitLab take. Pack
+negotiation is a large amount of subtle code with nothing to gain from
+reimplementing; what is worth owning is the layer around it.
+
+Auth is HTTP Basic with an API token as the password (the username is ignored,
+as on every other host). The decision itself is made by the API, not by gitd —
+one `authorize()` call covers a browser request and a `git push` alike, rather
+than two implementations that drift. Scopes apply: a `repo:read` token can
+clone and cannot push.
+
+**A pushed commit may not assert its own provenance.** GitLit issues
+`GitLit-` trailers from the commit path, where spans are actually computed.
+A commit arriving over the wire carries no such evidence, so a `pre-receive`
+hook rejects any push whose new commits carry those trailers:
+
+```
+remote: GitLit refused this push.
+remote:   Commit 0f88061 carries GitLit- provenance trailers.
+remote:   Those trailers are issued by GitLit itself, from the commit path
+remote:   where spans are actually computed...
+```
+
+Push without them and the push is accepted; the prose is recorded as `unknown`
+origin, which means only that GitLit did not observe how it was written. That
+is an honest state (§6.4), not a penalty — an author writing in their own
+editor is doing something entirely legitimate.
 
 ## Authentication
 

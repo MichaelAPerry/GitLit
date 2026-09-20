@@ -5,6 +5,7 @@ import { GitLitError } from "@gitlit/core";
 import { initRepo, readFileAt, repoPath, log, resolveHead, listTree } from "./repo.js";
 import { writeCommit } from "./commit-path.js";
 import { KeyStore } from "./keystore.js";
+import { isGitRoute, registerSmartHttp } from "./git-routes.js";
 
 const REPO_ROOT = process.env.REPO_ROOT ?? "./repos";
 
@@ -41,7 +42,9 @@ export function buildServer() {
   }
 
   app.addHook("onRequest", async (req, reply) => {
-    if (req.url === "/health" || !serviceToken) return;
+    // Git transport routes authenticate the end user themselves, against the
+    // API, rather than with the internal service token.
+    if (req.url === "/health" || isGitRoute(req.url) || !serviceToken) return;
     const header = req.headers.authorization;
     const presented = header?.startsWith("Bearer ") ? header.slice(7).trim() : "";
     const a = Buffer.from(presented);
@@ -59,6 +62,8 @@ export function buildServer() {
   });
 
   app.get("/health", async () => ({ ok: true, service: "gitd" }));
+
+  registerSmartHttp(app, REPO_ROOT);
 
   app.post("/repos", async (req) => {
     const body = z.object({ repoId: z.string(), defaultBranch: z.string().default("main") }).parse(req.body);
