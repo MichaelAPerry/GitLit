@@ -18,10 +18,10 @@ Phases 0–2 of the build order (§15).
 | `packages/provenance` | Spans, trailers, signed receipt chain (§7) | 28 tests |
 | `packages/auth` | Credentials, roles, OAuth, the authorization decision | 136 tests |
 | `packages/db` | Drizzle schema for §11, migrations, PGlite test harness | 13 tests |
-| `apps/gitd` | The commit path — the only writer of provenance (§5) | 16 tests |
+| `apps/gitd` | The commit path, backups, offline verification (§5, §7.4) | 75 tests |
 | `apps/api` | REST surface (§12), authorization enforcement | 43 tests |
 | `apps/web` | Dashboard, GitLit Write, Provenance Diff Viewer | 73 tests + 4 in-browser |
-| `apps/mcp` | MCP server — how the AI Researcher executes (§8) | 63 tests |
+| `apps/mcp` | MCP server — how the AI Researcher executes (§8) | 73 tests |
 
 ## Two properties worth knowing before reading the code
 
@@ -51,7 +51,7 @@ Then open http://localhost:3000.
 ## Checks
 
 ```bash
-pnpm test        # 538 tests
+pnpm test        # 548 tests
 pnpm typecheck
 pnpm --filter @gitlit/web test:e2e   # 4 real-browser tests
 ```
@@ -284,18 +284,27 @@ own Claude, which connects to GitLit over MCP (§2.6).
 pnpm --filter @gitlit/mcp build && node apps/mcp/dist/http.js   # :4002/mcp
 ```
 
-Then add `http://localhost:4002/mcp` as a connector in Claude's settings.
+Then add `http://localhost:4002/mcp` as a connector in Claude's settings, with
+your GitLit API token as the bearer credential.
 
 **Claude Code:**
 
 ```bash
-claude mcp add gitlit -- node /path/to/GitLit/apps/mcp/dist/stdio.js
+GITLIT_API_TOKEN=glt_... claude mcp add gitlit -- node /path/to/GitLit/apps/mcp/dist/stdio.js
 ```
 
-Both need `GITLIT_API_TOKEN` — a token you mint in GitLit with the
-`agent:research` and `repo:read` scopes. The MCP server goes through the API,
-never directly to gitd, so every agent call passes the same permission checks a
-browser request does.
+Both need a token you mint in GitLit with the `agent:research` and `repo:read`
+scopes. The MCP server goes through the API, never directly to gitd, so every
+agent call passes the same permission checks a browser request does.
+
+**The HTTP server holds no credential of its own.** It reads the bearer token
+off each request, resolves it against the API, and makes every downstream call
+with *that* token. One shared server-side token would authenticate an author at
+the door and then act on their behalf with the operator's permissions — a
+confused deputy, not an authorization system. An unknown or revoked token gets
+401; a token without `agent:research` gets 403; and an MCP session id can only
+be resumed by the user who opened it. The stdio server checks the same things
+once at startup and exits with an explanation rather than failing later, mid-tool-call.
 
 Ten tools, and note what is missing: **there is no tool that writes prose.**
 `gitlit_commit_architecture` can only write `manuscript_architecture.md` and

@@ -10,7 +10,7 @@ How to run it and what each package does: [`README.md`](./README.md).
 
 ## 1. State
 
-515 tests across 10 packages. `pnpm typecheck` clean across 18 tasks.
+548 tests across 11 packages. `pnpm typecheck` clean across 18 tasks.
 
 The product works end to end and has been driven against live services, not
 just asserted in tests:
@@ -67,17 +67,30 @@ flow dead-ends.
 - **Done means:** a real address receives a link and completes sign-in with
   `NODE_ENV=production`.
 
-### 2.3 The MCP HTTP transport is wide open
+### 2.3 The MCP HTTP transport is wide open — **DONE**
 
-`apps/mcp/src/http.ts` line ~35: any bearer token maps to a single user.
-Anyone who reaches that port gets agent access as whoever
-`GITLIT_API_TOKEN` belongs to. Labelled a placeholder; never closed.
+The hole was wider than the placeholder that flagged it. `gitlit-client.ts`
+read one `GITLIT_API_TOKEN` from the environment for *every* downstream call,
+so fixing only the bearer check would have closed the front door and left a
+confused deputy behind it: each authenticated author's agent would have acted
+with the operator's permissions.
 
-- Resolve the bearer against the API (the internal endpoint pattern used by
-  `gitd` in `apps/gitd/src/git-routes.ts` is the model to copy).
-- **Done means:** an unknown token gets 401, and two different tokens resolve
-  to two different users with separate sessions.
-- **Until then, do not expose port 4002.**
+What changed:
+
+- `gitlit-client.ts` — the global `gitlit` object and the env-token reader are
+  gone. `createGitlitClient(token)` builds a per-caller client; `identify(token)`
+  resolves a token against `/v1/me`. The server now has no identity of its own.
+- `http.ts` — real bearer auth with a 60s identity cache (revocation still takes
+  effect within the TTL), 401 with `www-authenticate` for an unknown token, 403
+  when `agent:research` is absent, and `transportOwners` so a resumed
+  `mcp-session-id` must belong to the same user that opened it.
+- `stdio.ts` — validates the token and scope at startup, explains on stderr and
+  exits non-zero rather than failing later, mid-tool-call.
+- `tools.ts` — `ToolContext` carries the caller's `GitlitClient`.
+
+**Done:** `apps/mcp/src/http.test.ts` (10 tests) covers the unknown token → 401,
+two tokens → two users with separate sessions, and that no token is read from
+the environment. Port 4002 is safe to expose.
 
 ### 2.4 Nothing to deploy with
 
@@ -107,7 +120,7 @@ Order matters: backups first, because everything after it increases the
 amount that can be lost.
 
 1. Backups + a rehearsed restore (§2.1)
-2. MCP HTTP auth (§2.3) — smallest fix, removes a live hole
+2. ~~MCP HTTP auth (§2.3) — smallest fix, removes a live hole~~ **DONE**
 3. Email sending (§2.2)
 4. Deploy config (§2.4)
 5. Rate limits + Sentry (§2.5)
@@ -116,7 +129,7 @@ amount that can be lost.
 
 ### The two-hour alternative
 
-If the test is you and two friends on throwaway chapters: fix §2.3, register
+If the test is you and two friends on throwaway chapters: register
 OAuth apps, deploy without backups, and say plainly that manuscripts may be
 lost. Only acceptable while nothing real is in it.
 

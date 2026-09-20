@@ -12,7 +12,7 @@ import {
 } from "./novelty.js";
 import { cosine, loadEmbedder } from "@gitlit/embed";
 import { buildFrontMatter, validateArchitecture } from "./architecture.js";
-import { gitlit } from "./gitlit-client.js";
+import type { GitlitClient } from "./gitlit-client.js";
 import type { AgentSession, SessionStore } from "./session.js";
 
 const ALL_CORPORA: CorpusName[] = ["openlibrary", "googlebooks", "crossref", "semanticscholar"];
@@ -22,6 +22,8 @@ export interface ToolContext {
   ledgers: Map<string, Ledger>;
   transport: "stdio" | "http";
   userId: string;
+  /** Bound to the caller's own token — the server holds no credential. */
+  gitlit: GitlitClient;
   clientName?: string;
   declaredModel?: string;
 }
@@ -35,8 +37,8 @@ function ledgerFor(ctx: ToolContext, session: AgentSession): Ledger {
   return l;
 }
 
-async function resolveRepo(owner: string, slug: string) {
-  const { repositories } = await gitlit.listRepositories();
+async function resolveRepo(ctx: ToolContext, owner: string, slug: string) {
+  const { repositories } = await ctx.gitlit.listRepositories();
   const repo = repositories.find((r) => r.owner === owner && r.slug === slug);
   if (!repo) throw toolRejected("unknown_repository", `No repository ${owner}/${slug}`);
   return repo;
@@ -72,7 +74,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       "repo slug for the other tools. Read-only; nothing is recorded to the book's history.",
     inputSchema: {},
   }, async () => {
-    const { repositories } = await gitlit.listRepositories();
+    const { repositories } = await ctx.gitlit.listRepositories();
     return json(repositories.map((r) => ({
       owner: r.owner, slug: r.slug, title: r.title, form: r.form, phase: r.phase,
     })));
@@ -85,10 +87,10 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       "Opens an agent session for this book if one is not already open. Read-only.",
     inputSchema: { owner: z.string(), slug: z.string() },
   }, async ({ owner, slug }) => {
-    const repo = await resolveRepo(owner, slug);
+    const repo = await resolveRepo(ctx, owner, slug);
     const session = sessionFor(ctx, repo.id);
     return ctx.sessions.record(session, "gitlit_get_premise", { owner, slug }, async () => {
-      const { content } = await gitlit.readBlob(owner, slug, ".gitlit/premise.md");
+      const { content } = await ctx.gitlit.readBlob(owner, slug, ".gitlit/premise.md");
       return json({
         sessionId: session.id,
         repo: { owner, slug, title: repo.title, form: repo.form, phase: repo.phase },
@@ -118,7 +120,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       limit: z.number().int().min(1).max(25).default(10),
     },
   }, async ({ owner, slug, query, corpora, domain, limit }) => {
-    const repo = await resolveRepo(owner, slug);
+    const repo = await resolveRepo(ctx, owner, slug);
     const session = sessionFor(ctx, repo.id);
     return ctx.sessions.record(session, "gitlit_search_prior_works", { query, domain }, async () => {
       ctx.sessions.spend(session, "searches");
@@ -151,10 +153,10 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       "verdict and supply the reasoning in gitlit_record_novelty.",
     inputSchema: { owner: z.string(), slug: z.string() },
   }, async ({ owner, slug }) => {
-    const repo = await resolveRepo(owner, slug);
+    const repo = await resolveRepo(ctx, owner, slug);
     const session = sessionFor(ctx, repo.id);
     return ctx.sessions.record(session, "gitlit_similarity_check", { owner, slug }, async () => {
-      const { content: premise } = await gitlit.readBlob(owner, slug, ".gitlit/premise.md");
+      const { content: premise } = await ctx.gitlit.readBlob(owner, slug, ".gitlit/premise.md");
       if (!premise) throw toolRejected("no_premise", "This book has no premise recorded yet.");
 
       const rows = ledgerFor(ctx, session).all();
@@ -219,7 +221,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       rationale: z.string().min(40).describe("Why, citing the nearest works by ledger ref."),
     },
   }, async ({ owner, slug, verdict, rationale }) => {
-    const repo = await resolveRepo(owner, slug);
+    const repo = await resolveRepo(ctx, owner, slug);
     const session = sessionFor(ctx, repo.id);
     return ctx.sessions.record(session, "gitlit_record_novelty", { verdict }, async () => {
       session.noveltyVerdict = verdict;
@@ -263,7 +265,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       title: z.string().optional(),
     },
   }, async ({ owner, slug, url, domain, title }) => {
-    const repo = await resolveRepo(owner, slug);
+    const repo = await resolveRepo(ctx, owner, slug);
     const session = sessionFor(ctx, repo.id);
     return ctx.sessions.record(session, "gitlit_add_source", { url, domain }, async () => {
       ctx.sessions.spend(session, "fetches");
@@ -316,7 +318,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       message: z.string().default("Add manuscript architecture"),
     },
   }, async ({ owner, slug, markdown, message }) => {
-    const repo = await resolveRepo(owner, slug);
+    const repo = await resolveRepo(ctx, owner, slug);
     const session = sessionFor(ctx, repo.id);
     return ctx.sessions.record(session, "gitlit_commit_architecture", { message }, async () => {
       if (session.status === "halted" && !session.noveltyAnswered) {
@@ -343,7 +345,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       const parsed = validateArchitecture(markdown, ledger);
       ctx.sessions.spend(session, "architectureCommits");
 
-      const { content: premise } = await gitlit.readBlob(owner, slug, ".gitlit/premise.md");
+      const { content: premise } = await ctx.gitlit.readBlob(owner, slug, ".gitlit/premise.md");
       const frontMatter = buildFrontMatter({
         sessionId: session.id,
         declaredModel: session.declaredModel,
@@ -356,7 +358,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       const body = markdown.replace(/^---\n[\s\S]*?\n---\n*/, "");
       const document = `${frontMatter}\n\n${body.trim()}\n`;
 
-      const result = await gitlit.commitArchitecture(owner, slug, {
+      const result = await ctx.gitlit.commitArchitecture(owner, slug, {
         message,
         agentSessionId: session.id,
         declaredModel: session.declaredModel,
@@ -399,12 +401,12 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       path: z.string().describe("e.g. manuscript/chapters/01-the-lighthouse.md"),
     },
   }, async ({ owner, slug, path }) => {
-    const repo = await resolveRepo(owner, slug);
+    const repo = await resolveRepo(ctx, owner, slug);
     const session = sessionFor(ctx, repo.id);
     return ctx.sessions.record(session, "gitlit_read_document", { path }, async () => {
       const [{ content }, sidecar] = await Promise.all([
-        gitlit.readBlob(owner, slug, path),
-        gitlit.readBlob(owner, slug, `.gitlit/provenance/${path}.jsonl`),
+        ctx.gitlit.readBlob(owner, slug, path),
+        ctx.gitlit.readBlob(owner, slug, `.gitlit/provenance/${path}.jsonl`),
       ]);
       if (content === null) throw toolRejected("not_found", `No such file: ${path}`);
       const spans = (sidecar.content ?? "").split("\n").filter(Boolean).map((l) => JSON.parse(l));
@@ -420,10 +422,10 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       "marked as human-written was not composed elsewhere.",
     inputSchema: { owner: z.string(), slug: z.string() },
   }, async ({ owner, slug }) => {
-    const repo = await resolveRepo(owner, slug);
+    const repo = await resolveRepo(ctx, owner, slug);
     const session = sessionFor(ctx, repo.id);
     return ctx.sessions.record(session, "gitlit_provenance_summary", { owner, slug }, async () => {
-      const summary = await gitlit.provenance(owner, slug);
+      const summary = await ctx.gitlit.provenance(owner, slug);
       const total = Object.values(summary.charsByOrigin).reduce((a, b) => a + b, 0);
       return json({
         ...summary,
@@ -442,7 +444,7 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       "novelty state. Useful for telling the author what will be recorded before you commit.",
     inputSchema: { owner: z.string(), slug: z.string() },
   }, async ({ owner, slug }) => {
-    const repo = await resolveRepo(owner, slug);
+    const repo = await resolveRepo(ctx, owner, slug);
     // A status read must not create a session, and must report the one that
     // did the work even after it has been committed and closed.
     const session = ctx.sessions.latestForRepo(repo.id, ctx.userId);
