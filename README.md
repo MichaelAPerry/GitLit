@@ -11,7 +11,7 @@ Phases 0–2 of the build order (§15).
 
 | Package | What it does | Tested |
 |---|---|---|
-| `packages/core` | Domain types, ULIDs, path allowlist (§8.3) | via consumers |
+| `packages/core` | Domain types, ULIDs, path allowlist (§8.3) | 43 tests |
 | `packages/prose` | Prose normalizer — one sentence per line (§2.2) | 21 tests |
 | `packages/diff` | Sentence diff, move detection, plan-to-prose derivation (§9) | 45 tests |
 | `packages/embed` | Pinned local embedding model (§2.7) | 24 tests |
@@ -22,7 +22,7 @@ Phases 0–2 of the build order (§15).
 | `packages/observability` | Error monitoring, and what may never leave the process | 51 tests |
 | `packages/preflight` | Checks a running deployment for the silent failures | 29 tests |
 | `apps/gitd` | The commit path, backups, offline verification (§5, §7.4) | 83 tests |
-| `apps/api` | REST surface (§12), authorization enforcement, rate limits | 82 tests |
+| `apps/api` | REST surface (§12), authorization enforcement, rate limits | 86 tests |
 | `apps/web` | Dashboard, GitLit Write, Provenance Diff Viewer | 79 tests + 4 in-browser |
 | `apps/mcp` | MCP server — how the AI Researcher executes (§8) | 73 tests |
 
@@ -54,7 +54,7 @@ Then open http://localhost:3000.
 ## Checks
 
 ```bash
-pnpm test        # 708 tests
+pnpm test        # 738 tests
 pnpm typecheck
 pnpm --filter @gitlit/web test:e2e   # 4 real-browser tests
 ```
@@ -536,6 +536,9 @@ host's caches, so removing the commit does not un-publish it.
 and `*.key.json`. `backups/` earns its place — a backup carries both a
 manuscript bundle and a copy of that repository's signing key, and the default
 `BACKUP_DIR` is `./backups`, so a local backup run lands inside the checkout.
+
+For an adversarial read — what was probed, what was fixed, and what is still
+weak — see [`SECURITY.md`](./SECURITY.md).
 
 ## Known gaps — read this before trusting the build
 

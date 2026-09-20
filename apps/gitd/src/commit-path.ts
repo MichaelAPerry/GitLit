@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import {
-  isProseFile, normalizePath, newReceiptId,
+  assertNotReserved, isProseFile, normalizePath, newReceiptId,
   type ProvenanceClass, type ProvenanceSpan, type SpanOrigin,
 } from "@gitlit/core";
 import { countWords, normalize } from "@gitlit/prose";
@@ -76,6 +76,14 @@ export async function writeCommit(req: WriteRequest): Promise<WriteResult> {
 
   for (const change of req.changes) {
     const path = normalizePath(change.path);
+
+    /**
+     * The single chokepoint (§5). Every write — author prose, agent research,
+     * anything holding the service token — funnels through here, so the one
+     * guard that no route can forget lives here: a caller may never write the
+     * provenance record. Only the generation below does.
+     */
+    assertNotReserved(path);
 
     if (change.content === null) {
       const before = await readFileAt(req.gitdir, req.ref, path);

@@ -10,7 +10,7 @@ How to run it and what each package does: [`README.md`](./README.md).
 
 ## 1. State
 
-708 tests across 14 packages. `pnpm typecheck` clean across 22 tasks.
+738 tests across 14 packages. `pnpm typecheck` clean across 22 tasks.
 
 The product works end to end and has been driven against live services, not
 just asserted in tests:
@@ -251,6 +251,33 @@ It also found a false alarm in its own first draft — reporting "some keys are
 unencrypted" on a fresh deployment with no keys at all. Fixed to count keys
 rather than return a boolean: a checker that cries wolf on every new install
 is one nobody reads.
+
+---
+
+### 2.7 A black-hat pass — **findings fixed, one limitation recorded**
+
+An adversarial read of the whole system (`SECURITY.md`). Two remotely
+exploitable holes, both closed with regression tests:
+
+- **Authors could forge the provenance record.** No path check let an author
+  (or an `agent:research` token) write `.gitlit/receipts/`, `.gitlit/keys/`
+  and `.gitlit/provenance/` directly — relabel machine text as human, plant a
+  verifying key — and a clone still verified `valid: true`. Those subtrees are
+  now reserved to the commit path's own generation, enforced at the author
+  route, the agent route, and the commit-path chokepoint. Proven closed by
+  re-running the exploit.
+- **`/v1/internal/git-access` was unauthenticated** and returned a private
+  repo's on-disk path to anyone, plus an existence oracle. Now service-token
+  gated, and the path is gone from the response.
+
+Held up: cross-account access (404, not 403), every route guarded, CORS,
+per-user MCP identity, authoring-session ownership.
+
+**Recorded, not fixed:** offline verification has no trust anchor, so a clone
+an attacker rebuilds wholesale with their own key still verifies. That is what
+publisher verification links (§12.6, Phase 7) are for. Until then provenance is
+evidence, not proof — the architecture's own position (§3). Do not call a green
+`verifyRepository` "verified human".
 
 ---
 

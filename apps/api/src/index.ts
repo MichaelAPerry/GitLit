@@ -1,7 +1,7 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { ZodError, z } from "zod";
-import { GitLitError, assertAgentWritable, forbidden, newRepoId, notFound } from "@gitlit/core";
+import { GitLitError, assertAgentWritable, assertAuthorWritable, constantTimeEquals, forbidden, newRepoId, notFound } from "@gitlit/core";
 import {
   beatsForChapter, chapterIdForPath, diffPlanToProse, diffProse, paragraphsOf,
   DERIVATION_ALGO_VERSION,
@@ -495,6 +495,10 @@ app.put("/v1/repositories/:owner/:slug/documents/*", async (req) => {
   const { owner, slug, "*": path } = req.params as { owner: string; slug: string; "*": string };
   const repo = await mustFind(owner, slug);
   requireAccess(req, repo, "repo:write");
+  // Authors write prose and book metadata, never the provenance record. The
+  // commit path enforces this too; failing here gives a clear 4xx before any
+  // work, rather than a 500 from gitd.
+  assertAuthorWritable(path);
   const principal = requireUser(req);
   const body = z.object({
     content: z.string(),
@@ -613,7 +617,25 @@ app.post("/v1/repositories/:owner/:slug/architecture", async (req) => {
  * own authorization too — that lives here, so the same authorize() decision
  * covers a browser request and a `git push`. Service-token protected.
  */
+/**
+ * Internal: authorize a Git transport request (§12.7). Called by gitd, never
+ * by a browser.
+ *
+ * Service-token gated. Without the gate this endpoint answered anyone: it
+ * confirmed whether a private repository existed (a real repo returns
+ * "anonymous", a fake one "not_found" — an enumeration oracle) and returned
+ * the repo's id and its absolute path on the server's disk. gitd sends the
+ * token already and uses only repoId, so the gate costs nothing and the path
+ * never needed to leave this process.
+ */
 app.post("/v1/internal/git-access", async (req) => {
+  const expected = process.env.GITD_SERVICE_TOKEN;
+  const header = req.headers.authorization;
+  const presented = header?.startsWith("Bearer ") ? header.slice(7).trim() : "";
+  if (!expected || !presented || !constantTimeEquals(expected, presented)) {
+    throw forbidden("This endpoint is internal to GitLit.");
+  }
+
   const body = z.object({
     owner: z.string(),
     slug: z.string(),
@@ -632,12 +654,14 @@ app.post("/v1/internal/git-access", async (req) => {
     collaborators: repo.collaborators,
   });
 
+  // repoId only — gitd derives the on-disk path itself from REPO_ROOT. The
+  // storage path is never returned: it revealed the server's filesystem layout
+  // to a caller that has no use for it.
   return {
     allowed: decision.allowed,
     reason: decision.reason,
     authenticated: principal !== null,
     repoId: repo.id,
-    storagePath: repo.storagePath,
     userId: principal?.userId,
   };
 });

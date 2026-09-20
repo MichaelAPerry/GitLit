@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 process.env.NODE_ENV = "test";
+process.env.GITD_SERVICE_TOKEN = "test-service-token";
 
 // gitd is a separate service; these tests are about authorization, not git.
 vi.mock("./gitd-client.js", () => ({
@@ -152,6 +153,43 @@ describe("private book access", () => {
   it("does not list it anonymously", async () => {
     const res = await app.inject({ method: "GET", url: "/v1/repositories" });
     expect(res.json().repositories).toHaveLength(0);
+  });
+});
+
+describe("the internal git-access endpoint", () => {
+  const call = (headers: Record<string, string> = {}) =>
+    app.inject({
+      method: "POST", url: "/v1/internal/git-access", headers,
+      payload: { owner: mara.handle, slug: "any", capability: "repo:read" },
+    });
+
+  it("refuses a caller with no service token", async () => {
+    // Before this gate it answered anyone, confirming private repos existed and
+    // returning the server's on-disk path for them.
+    expect((await call()).statusCode).toBe(403);
+  });
+
+  it("refuses a wrong service token", async () => {
+    expect((await call({ authorization: "Bearer wrong" })).statusCode).toBe(403);
+  });
+
+  it("refuses an author's own session token — this is gitd's endpoint, not a user's", async () => {
+    expect((await call({ authorization: bearer(mara.session).authorization })).statusCode).toBe(403);
+  });
+
+  it("answers gitd, and never returns the storage path", async () => {
+    const slug = `gitd${n}`;
+    await createBook(mara.session, slug);
+    const res = await app.inject({
+      method: "POST", url: "/v1/internal/git-access",
+      headers: { authorization: "Bearer test-service-token" },
+      payload: { owner: mara.handle, slug, capability: "repo:read", credential: mara.session },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toHaveProperty("repoId");
+    expect(body).not.toHaveProperty("storagePath");
+    expect(res.body).not.toMatch(/\/(tmp|data|home)\//);
   });
 });
 
