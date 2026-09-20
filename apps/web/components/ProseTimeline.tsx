@@ -12,6 +12,18 @@ const PROV_CLASS: Record<string, string> = {
   human: "var(--prov-human)",
 };
 
+/**
+ * ULIDs are timestamp-prefixed, so a leading truncation renders every receipt
+ * issued on the same day identically — unlike a git short sha, where the
+ * entropy is spread throughout. Show the random tail instead, which is the
+ * part that actually distinguishes one receipt from another.
+ */
+function shortReceipt(id: string): string {
+  const [prefix, ulid] = id.split("_");
+  if (!ulid) return id.slice(-8);
+  return `${prefix}…${ulid.slice(-6)}`;
+}
+
 function phaseOf(c: Commit): string {
   if (c.provenance === "ai") return "Research & architecture";
   if (c.subject.toLowerCase().startsWith("create ")) return "Premise";
@@ -46,7 +58,7 @@ export function ProseTimeline({ commits }: { commits: Commit[] }) {
               <div className="tl-meta">
                 {new Date(c.committedAt).toLocaleString()} · {c.author} ·{" "}
                 <code>{c.sha.slice(0, 7)}</code>
-                {c.receipt && <> · receipt <code>{c.receipt.slice(0, 12)}</code></>}
+                {c.receipt && <> · receipt <code title={c.receipt}>{shortReceipt(c.receipt)}</code></>}
               </div>
             </div>
           </div>

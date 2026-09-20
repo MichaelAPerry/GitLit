@@ -30,7 +30,7 @@ export function Composer({
   const [status, setStatus] = useState<string | null>(null);
   const [showRecord, setShowRecord] = useState(false);
   const { events, aggregates, handlers } = useInputProvenance();
-  const textarea = useRef<HTMLTextAreaElement>(null);
+  const textarea = useRef<HTMLTextAreaElement | null>(null);
   const dirty = useRef(false);
   const sessionId = useRef<string | null>(null);
   const sentEvents = useRef(0);
@@ -70,7 +70,7 @@ export function Composer({
           keystrokes: aggregates.keystrokes,
           medianWpm: aggregates.medianWpm,
           modeWords: aggregates.modeWords,
-          events: pending.filter((e) => e.contentHash !== "pending"),
+          events: pending,
         }),
       });
       sentEvents.current = events.length;
@@ -180,13 +180,20 @@ export function Composer({
 
       <div className="write-area">
         <textarea
-          ref={textarea}
+          ref={(el) => {
+            textarea.current = el;
+            handlers.ref(el);
+          }}
           className="composer"
           value={text}
           placeholder="Begin."
           spellCheck
           onChange={(e) => { setText(e.target.value); setSaved(false); dirty.current = true; }}
-          {...handlers}
+          onKeyDown={handlers.onKeyDown}
+          onPaste={handlers.onPaste}
+          onDrop={handlers.onDrop}
+          onCompositionStart={handlers.onCompositionStart}
+          onCompositionEnd={handlers.onCompositionEnd}
         />
       </div>
     </div>

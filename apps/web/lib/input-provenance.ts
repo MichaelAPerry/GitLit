@@ -18,7 +18,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export type InputMode =
   | "typed" | "pasted" | "dictated" | "composed" | "dropped" | "imported" | "synthetic";
 
-export interface InputEvent {
+/** Named to avoid shadowing the DOM `InputEvent`, which this module reads. */
+export interface InputEventRecord {
   inputMode: Exclude<InputMode, "typed">;
   charCount: number;
   wordCount: number;
@@ -50,7 +51,7 @@ async function sha256(text: string): Promise<string> {
 const countWords = (t: string) => (t.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) ?? []).length;
 
 export function useInputProvenance() {
-  const [events, setEvents] = useState<InputEvent[]>([]);
+  const [events, setEvents] = useState<InputEventRecord[]>([]);
   const [aggregates, setAggregates] = useState<SessionAggregates>({
     keystrokes: 0, modeWords: {}, medianWpm: null, burstCount: 0,
     ikiHistogram: new Array(BUCKETS.length).fill(0),
@@ -59,17 +60,28 @@ export function useInputProvenance() {
   const lastKey = useRef<number | null>(null);
   const intervals = useRef<number[]>([]);
   const composing = useRef(false);
+  const element = useRef<HTMLTextAreaElement | null>(null);
+  const nativeListener = useRef<((event: Event) => void) | null>(null);
 
   const record = useCallback(async (mode: Exclude<InputMode, "typed">, text: string, isTrusted: boolean) => {
     const words = countWords(text);
     setAggregates((a) => ({ ...a, modeWords: { ...a.modeWords, [mode]: (a.modeWords[mode] ?? 0) + words } }));
     if (text.length < EVENT_THRESHOLD) return;
+
+    /**
+     * Hash before recording, not after.
+     *
+     * An earlier version inserted the event with a "pending" placeholder and
+     * back-filled it once the digest resolved — but the back-fill matched on
+     * the placeholder, so with two insertions in flight the second digest
+     * landed on the first event. A content hash that does not match its
+     * content is worse than none: it is evidence that is wrong.
+     */
+    const contentHash = await sha256(text);
     setEvents((prev) => [...prev, {
       inputMode: mode, charCount: text.length, wordCount: words,
-      contentHash: "pending", isTrusted, occurredAt: new Date().toISOString(),
+      contentHash, isTrusted, occurredAt: new Date().toISOString(),
     }]);
-    const hash = await sha256(text);
-    setEvents((prev) => prev.map((e) => (e.contentHash === "pending" ? { ...e, contentHash: hash } : e)));
   }, []);
 
   const onKeyDown = useCallback(() => {
@@ -97,19 +109,41 @@ export function useInputProvenance() {
   }, [record]);
 
   /**
-   * `beforeinput` names the origin of insertions that never touched a key.
-   * Speech-to-text arrives as insertReplacementText; it is a distinct mode and
-   * is never treated as suspicious.
+   * `beforeinput` names the origin of insertions that never touched a key —
+   * speech-to-text, autofill, script-driven insertion.
+   *
+   * This must be a NATIVE listener. React's `onBeforeInput` is a synthetic
+   * polyfill built from composition and keypress events and does not carry
+   * `inputType`, so reading it there silently misses dictation and then
+   * misfiles it as script-driven input — exactly the accessibility
+   * misclassification this module exists to avoid.
    */
-  const onBeforeInput = useCallback((e: React.FormEvent<HTMLTextAreaElement>) => {
-    const native = e.nativeEvent as InputEvent_;
-    const data = native.data ?? "";
-    if (!data) return;
-    if (native.inputType === "insertReplacementText" && !composing.current) {
-      void record("dictated", data, native.isTrusted);
-    } else if (!native.isTrusted) {
-      void record("synthetic", data, false);
+  const attachTo = useCallback((el: HTMLTextAreaElement | null) => {
+    if (element.current === el) return;
+
+    if (element.current && nativeListener.current) {
+      element.current.removeEventListener("beforeinput", nativeListener.current);
     }
+    element.current = el;
+    if (!el) { nativeListener.current = null; return; }
+
+    const listener = (event: Event) => {
+      const input = event as InputEvent;
+      const data = input.data ?? "";
+      if (!data) return;
+
+      if (input.inputType === "insertReplacementText" && !composing.current) {
+        void record("dictated", data, input.isTrusted);
+        return;
+      }
+      if (input.inputType === "insertFromPaste" || input.inputType === "insertFromDrop") {
+        return; // already recorded by the paste/drop handlers
+      }
+      if (!input.isTrusted) void record("synthetic", data, false);
+    };
+
+    nativeListener.current = listener;
+    el.addEventListener("beforeinput", listener);
   }, [record]);
 
   useEffect(() => {
@@ -131,9 +165,16 @@ export function useInputProvenance() {
   }, []);
 
   return {
-    events, aggregates,
-    handlers: { onKeyDown, onPaste, onDrop, onCompositionStart, onCompositionEnd, onBeforeInput },
+    events,
+    aggregates,
+    /** Spread onto the editor element. `ref` installs the native listener. */
+    handlers: {
+      ref: attachTo,
+      onKeyDown,
+      onPaste,
+      onDrop,
+      onCompositionStart,
+      onCompositionEnd,
+    },
   };
 }
-
-interface InputEvent_ extends Event { data?: string | null; inputType?: string }

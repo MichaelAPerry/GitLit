@@ -19,7 +19,7 @@ Phases 0–2 of the build order (§15).
 | `packages/db` | Drizzle schema for §11, migrations, PGlite test harness | 13 tests |
 | `apps/gitd` | The commit path — the only writer of provenance (§5) | 16 tests |
 | `apps/api` | REST surface (§12), authorization enforcement | 43 tests |
-| `apps/web` | Dashboard + GitLit Write (§7.5) | — |
+| `apps/web` | Dashboard + GitLit Write (§7.5) | 50 tests + 4 in-browser |
 | `apps/mcp` | MCP server — how the AI Researcher executes (§8) | 55 tests |
 
 ## Two properties worth knowing before reading the code
@@ -50,9 +50,15 @@ Then open http://localhost:3000.
 ## Checks
 
 ```bash
-pnpm test        # 341 tests
+pnpm test        # 391 tests
 pnpm typecheck
+pnpm --filter @gitlit/web test:e2e   # 4 real-browser tests
 ```
+
+The browser tests exist for one reason: jsdom dispatches only synthetic
+events, so `isTrusted` is always false there and "genuine typing is trusted"
+is unverifiable by construction. That distinction is what separates an author
+writing from a script driving the page, so it gets a real browser.
 
 ## Data
 
@@ -207,7 +213,6 @@ These are staging, not surprises. What is *not* on this list is real and tested.
 | **No OAuth on the MCP HTTP transport.** | Any bearer token maps to the demo user. | Multi-user MCP. |
 | **Novelty scoring is lexical**, not semantic. | Verdicts are weaker than the design intends. The tool says so rather than implying otherwise. | Quality, not correctness. |
 | **Composer is a `<textarea>`**, not TipTap. | No rich text. The input provenance model is real and wired. | Editing comfort. |
-| **No web tests.** | UI regressions are uncaught. | Confidence in `apps/web`. |
 
 Signing keys are **not** on this list any more: they persist per repo, survive
 restarts, are wrapped with AES-256-GCM when `SIGNING_MASTER_KEY` is set, and the
