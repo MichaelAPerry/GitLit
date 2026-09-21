@@ -2,7 +2,7 @@ import Fastify from "fastify";
 import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { GitLitError, constantTimeEquals } from "@gitlit/core";
-import { initMonitoring, reportError } from "@gitlit/observability";
+import { initMonitoring, secretScrubbingStream, reportError } from "@gitlit/observability";
 import { initRepo, readFileAt, repoPath, log, resolveHead, listTree } from "./repo.js";
 import { writeCommit } from "./commit-path.js";
 import { KeyStore } from "./keystore.js";
@@ -20,7 +20,9 @@ const monitoringOn = initMonitoring({ service: "gitd" });
  * auditable — there is a single place where spans can be written.
  */
 export function buildServer() {
-  const app = Fastify({ logger: true });
+  // Scrub every log line: gitd holds GITD_SERVICE_TOKEN and SIGNING_MASTER_KEY,
+  // and neither may ever reach stdout through an error.
+  const app = Fastify({ logger: { stream: secretScrubbingStream() } });
 
   // Keys are persisted beside each repo and survive restarts (§7.4). An
   // in-memory store here would make every receipt unverifiable after a

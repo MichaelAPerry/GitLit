@@ -83,6 +83,53 @@ callback appends the session token to that redirect). Two real gaps under it:
 Regression tests: `packages/auth/src/oauth.test.ts` (aud/azp),
 `apps/api/src/oauth-csrf.test.ts` (browser binding).
 
+### Operator secrets and provider-token hijack (hardened)
+
+The concern here is different from losing a manuscript: the *operator's* keys
+leaking, and a user's Google/GitHub identity being hijacked through GitLit.
+Probed each path a secret could take out of the system.
+
+What was already right, and verified:
+
+- **No provider tokens are stored.** The `accounts` table holds a provider id,
+  the account id, the linked email and a verified flag — never an access or
+  refresh token. So a stolen database yields nothing an attacker can use to act
+  as a user on Google or GitHub. This is the main answer to "their OAuth gets
+  hijacked."
+- **No secret ships to the browser.** Nothing is prefixed `NEXT_PUBLIC_` but a
+  URL; the client bundle carries no key.
+- **No secret is returned by an endpoint.** `/v1/auth/providers` returns names
+  only; the operator surface returns booleans; the 500 handler never echoes an
+  error to the client; the OAuth token-exchange error surfaces the *provider's*
+  message, not our request (which holds the client secret).
+
+Two gaps closed:
+
+- **A secret could have reached the logs.** A Postgres connection error carries
+  the whole `DATABASE_URL` — password and all — and on a deployed box the log
+  stream is a shared third-party store. Every log line from the API and gitd
+  now passes through a scrubber at the stream that removes the literal value of
+  every operator secret (`DATABASE_URL`, `SIGNING_MASTER_KEY`, the provider
+  secrets, tokens…) plus any connection-URL password, by identity, whatever
+  wrote it. The first attempt used a pino `formatters.log` hook and **failed a
+  live test** — that hook is handed only the structured fields, so a secret in
+  an error *message* passed straight through. The scrubber was moved to the
+  stream, where the finished line cannot bypass it, and re-proven against a
+  real Fastify logger across five leak paths.
+- **The session token rode in a URL with no Referrer-Policy.** The token is
+  handed to the SPA in the callback URL (the cross-origin cookie is not
+  readable by the app's fetches). There were no security headers, so the day
+  anyone added a Google Font or an avatar image, that URL — token included —
+  would have leaked to the third party in a `Referer`. The web app now sends
+  `Referrer-Policy: no-referrer`, a `Content-Security-Policy` confining
+  `connect-src` to GitLit's own origins (so injected script cannot exfiltrate
+  the token either), `frame-ancestors 'none'`, `nosniff` and HSTS. Verified in
+  a real browser against the production build: headers present, no CSP
+  violations, the app still hydrates.
+
+Regression tests: `packages/observability/src/redact.test.ts`. Live proofs
+(log scrubbing, CSP) run in the security pass, not committed.
+
 ## Held up under probing
 
 - **Cross-account access (IDOR).** A signed-in stranger, and an anonymous

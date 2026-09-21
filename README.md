@@ -19,7 +19,7 @@ Phases 0–2 of the build order (§15).
 | `packages/auth` | Credentials, roles, OAuth, the authorization decision | 140 tests |
 | `packages/db` | Drizzle schema for §11, migrations, PGlite test harness | 16 tests |
 | `packages/mail` | Sign-in email, Resend transport, the production guard | 24 tests |
-| `packages/observability` | Error monitoring, and what may never leave the process | 51 tests |
+| `packages/observability` | Error monitoring, and what may never leave the process | 62 tests |
 | `packages/preflight` | Checks a running deployment for the silent failures | 29 tests |
 | `apps/gitd` | The commit path, backups, offline verification (§5, §7.4) | 83 tests |
 | `apps/api` | REST surface (§12), authorization enforcement, rate limits | 91 tests |
@@ -54,7 +54,7 @@ Then open http://localhost:3000.
 ## Checks
 
 ```bash
-pnpm test        # 749 tests
+pnpm test        # 760 tests
 pnpm typecheck
 pnpm --filter @gitlit/web test:e2e   # 4 real-browser tests
 ```

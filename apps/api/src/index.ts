@@ -22,7 +22,7 @@ import { operatorState, requireOperator } from "./operator.js";
 import {
   ADDRESS_WINDOW_MS, addressLimiter, limitedResponse, overAuthLimit, registerRateLimit,
 } from "./rate-limit.js";
-import { initMonitoring, reportError } from "@gitlit/observability";
+import { initMonitoring, secretScrubbingStream, reportError } from "@gitlit/observability";
 import { authoringSessions, evidenceFor } from "./sessions.js";
 
 /**
@@ -56,7 +56,12 @@ const TRUST_PROXY: boolean | ((addr: string, hop: number) => boolean) =
   process.env.NODE_ENV === "production" ? (_addr, hop) => hop < TRUST_PROXY_HOPS : false;
 
 export const app = Fastify({
-  logger: process.env.NODE_ENV !== "test",
+  // Every log line passes through the secret scrubber before it is written, so
+  // a stray error can never carry a DATABASE_URL, a provider secret or a token
+  // into the log stream (which on a deployed box is a shared third-party store).
+  logger: process.env.NODE_ENV === "test"
+    ? false
+    : { stream: secretScrubbingStream() },
   trustProxy: TRUST_PROXY,
 });
 const allowOrigin = originDecision();
