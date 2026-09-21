@@ -10,7 +10,7 @@ How to run it and what each package does: [`README.md`](./README.md).
 
 ## 1. State
 
-749 tests across 14 packages. `pnpm typecheck` clean across 22 tasks.
+758 tests across 14 packages. `pnpm typecheck` clean across 23 tasks.
 
 The product works end to end and has been driven against live services, not
 just asserted in tests:
@@ -27,7 +27,8 @@ just asserted in tests:
 - Semantic novelty scoring runs on a pinned, bit-reproducible local model.
 
 **The product works, it deploys, and the operations exist.** Every blocker in
-§2 is closed. What is left is not operational work but product work — §15's
+§2 is closed. It has also had three adversarial security passes (§2.7 and
+`SECURITY.md`). What is left is not operational work but product work — §15's
 phases 7–8, below.
 
 ---
@@ -275,6 +276,15 @@ more: Google id_tokens had no `aud` check (OIDC MUST — a token minted for any
 other Google app would have signed its holder in), and OAuth state was not
 bound to the initiating browser (login-CSRF — a victim could be signed into an
 attacker's account). Both closed with regression tests.
+
+A third pass on secret leakage: no provider tokens are stored (a stolen DB
+cannot impersonate a user on Google), and every API/gitd log line now passes
+through a scrubber that strips operator secret values and connection-URL
+passwords — the first version, a pino `formatters.log` hook, failed a live
+test because it never sees the message string, so it was moved to the stream.
+The web app gained `Referrer-Policy: no-referrer` and a CSP so the
+session-token-in-URL cannot leak by `Referer` or be exfiltrated by injected
+script. Full detail in `SECURITY.md`.
 
 Held up: cross-account access (404, not 403), every route guarded, CORS,
 per-user MCP identity, authoring-session ownership, PKCE, the OIDC nonce,

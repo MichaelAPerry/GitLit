@@ -1,13 +1,71 @@
 # GitLit
 
-Version control for book manuscripts, with verifiable provenance.
+**Version control for book manuscripts, with verifiable provenance — like GitHub for authors.**
 
-Architecture and rationale: [`system_architecture.md`](./system_architecture.md).
-Section references in code comments (§7.3, §8.2, …) point there.
+Every book is a real Git repository. As an author writes, GitLit records where
+each passage came from — typed by a person, pasted, or drafted with an AI
+assistant — and signs that record so it can be checked later, offline, by
+anyone with a copy of the manuscript. The premise: as AI writing becomes
+ordinary, *where a book came from* becomes worth proving, and an author who
+wrote their own words should be able to show it.
 
-## What is scaffolded
+GitLit runs no AI of its own. An author connects their **own** Claude to GitLit
+over MCP to do research; the platform never holds a model key and never writes
+prose.
 
-Phases 0–2 of the build order (§15).
+> ### Status: pre-launch — not yet hosted
+>
+> This is the open source code for GitLit, ahead of a public launch. **There is
+> no live site yet.** The code is complete enough for a small private test: it
+> builds, 758 tests pass, and it has been driven end to end — a real `git clone`
+> over the network, a real sign-in email, a real provenance receipt verified
+> from a fresh clone. What has *not* happened is a production deployment (see
+> [what's missing](#status--what-works-and-whats-missing)). If you found this
+> repo looking for the product, it isn't open to sign-ups yet.
+>
+> Provenance here is **evidence, not proof** — see [Security](./SECURITY.md).
+> GitLit makes tampering with a genuine history evident; it is not a guarantee
+> that a green check means "a human wrote this."
+
+**Read next:** [what works and what's missing](#status--what-works-and-whats-missing)
+· [running it locally](#running-it) · [the architecture](./system_architecture.md)
+· [deploying it](./DEPLOY.md) · [security](./SECURITY.md)
+
+## Status — what works and what's missing
+
+The build order (§15 of the architecture) runs in phases. Where things stand:
+
+**Working, and tested end to end**
+
+- **Author repositories** — every book is a real bare Git repository; `git
+  clone` and `git push` work over authenticated smart HTTP.
+- **Provenance** — signed, hash-chained receipts and per-passage human/AI
+  labels, written only by the commit path, verifiable offline from a clone.
+- **The Provenance Diff Viewer** — all three modes (plan-vs-prose,
+  divergence, timeline) on live data.
+- **Authentication** — passwordless email sign-in, plus Google and GitHub
+  OAuth, with the authorization decision made in one place.
+- **The AI Researcher over MCP** — an author's own Claude runs the research
+  flow; GitLit holds no model key.
+- **Operations** — Postgres, backups with a rehearsed restore, Docker images
+  and a full-stack `docker compose`, rate limiting, error monitoring, and a
+  `preflight` command that checks a live deployment.
+
+**Missing before it is a public product**
+
+| Missing | Why it matters | Status |
+|---|---|---|
+| **A production deployment** | Nobody can use it until it is hosted. The images and `docker compose` are verified; the Fly configs have never been applied. | [`DEPLOY.md`](./DEPLOY.md) is the runbook. |
+| **Publisher verification links** (§12.6) & the public gallery (§16.3) | The trust layer's payoff, and the thing that would make a green check mean something to an outside verifier — the "root of trust" a self-contained clone cannot have. | Not built (Phase 7–8). |
+| **Rich-text editor** | The writing surface is an instrumented `<textarea>`; the input-provenance capture is real, the comfort layer is not. | Phase 2.5. |
+| **Import / export** | `.docx` in, `.docx`/`.epub` out; imported work is labelled `imported`. The label plumbing exists; the file conversion does not. | Not built. |
+| **One-click MCP connector** | Auth works per-user today by pasted API token, not the OAuth 2.1 consent screen (§12.8). | Token flow works now. |
+| **SSH transport, a `gitlit` CLI, webhooks** | Convenience and completeness; smart HTTP already covers clone/push. | Not built. |
+
+A fuller, sharper list is in [`NEXT.md`](./NEXT.md); the security posture and
+its one honest limitation are in [`SECURITY.md`](./SECURITY.md).
+
+## The build, package by package
 
 | Package | What it does | Tested |
 |---|---|---|
@@ -26,11 +84,13 @@ Phases 0–2 of the build order (§15).
 | `apps/web` | Dashboard, GitLit Write, Provenance Diff Viewer | 79 tests + 4 in-browser |
 | `apps/mcp` | MCP server — how the AI Researcher executes (§8) | 73 tests |
 
+Section references in code comments (§7.3, §8.2, …) point at
+[`system_architecture.md`](./system_architecture.md).
+
 ## Two properties worth knowing before reading the code
 
 **There is no model API key anywhere in this repo, and there is not meant to be.**
-GitLit runs no inference (§2.6). Authors connect from their own Claude over MCP,
-which is Phase 4.
+GitLit runs no inference (§2.6). Authors connect from their own Claude over MCP.
 
 **Provenance is never taken from the caller.** The write path accepts a
 `newTextOrigin` describing how text *arrived*, but what survives from the parent
@@ -39,11 +99,23 @@ its own provenance class (§7.2).
 
 ## Running it
 
+**The whole stack in Docker** — the closest thing to the real deployment, and
+the fastest way to see it work:
+
+```bash
+docker compose up --build     # postgres, migrations, gitd, api, mcp, web
+```
+
+Then open http://localhost:3000. If it comes up green from empty volumes, the
+images and the startup order are right (this is also the local pre-flight for a
+real deploy — see [`DEPLOY.md`](./DEPLOY.md)).
+
+**Local development**, with hot reload and no Docker (the API falls back to an
+in-process Postgres, so you need nothing else running):
+
 ```bash
 pnpm install
-docker compose up -d          # postgres + redis (not needed for the demo below)
 cp .env.example .env
-
 pnpm --filter @gitlit/gitd build && node apps/gitd/dist/index.js &
 pnpm --filter @gitlit/api dev &
 pnpm --filter @gitlit/web dev
@@ -54,7 +126,7 @@ Then open http://localhost:3000.
 ## Checks
 
 ```bash
-pnpm test        # 760 tests
+pnpm test        # 758 tests
 pnpm typecheck
 pnpm --filter @gitlit/web test:e2e   # 4 real-browser tests
 ```
@@ -540,32 +612,19 @@ manuscript bundle and a copy of that repository's signing key, and the default
 For an adversarial read — what was probed, what was fixed, and what is still
 weak — see [`SECURITY.md`](./SECURITY.md).
 
-## Known gaps — read this before trusting the build
+## Known gaps and what's missing
 
-These are staging, not surprises. What is *not* on this list is real and tested.
+The honest list of what is not yet built is up top under
+[Status](#status--what-works-and-whats-missing), and in sharper detail in
+[`NEXT.md`](./NEXT.md). Two clarifications worth keeping here:
 
-| Gap | Consequence today | Blocks |
-|---|---|---|
-| **MCP auth is a GitLit API token, not §12.8's OAuth 2.1 flow.** | Per-user and enforced, but an author pastes a token rather than clicking through a consent screen. | A one-click connector. |
-| **Composer is a `<textarea>`**, not TipTap. | No rich text. The input provenance model is real and wired. | Editing comfort. |
-| **Rate limits are per machine, not shared.** | In-memory counters, so N API machines means N times the limit. Fine at one machine; wrong the moment you scale out. | Scaling the API past one machine. |
-| **Fly itself is unrehearsed.** | The images and compose are verified by building and running them; the `fly.toml` files have never been applied. | Treating app names, regions and volume sizes as tested. |
-
-Signing keys are **not** on this list any more: they persist per repo, survive
-restarts, are wrapped with AES-256-GCM, and gitd refuses to start in production
-without `SIGNING_MASTER_KEY` rather than leave them in plaintext on the volume —
-or regenerate a key and orphan an existing receipt chain.
-
-## What is deliberately absent
-
-- **SSH transport** (§12.7). Smart HTTP is live and `git clone`/`git push` work
-  over it; SSH is not wired.
-- **OAuth 2.1 for MCP** (§12.8), with dynamic client registration and a consent
-  screen. The transport authenticates and authorizes per user today — see
-  "Connecting from Claude" — but by API token rather than that flow.
-- **TipTap.** The composer is an instrumented `<textarea>`; the input provenance
-  model is real, the rich-text layer is Phase 2.5.
-- **Publisher verification links** (§12.6) and the public gallery (§16.3),
-  which are Phases 7–8 and the reason the trust layer exists at all.
-- **Import/export.** `.docx` in, `.docx`/`.epub` out. Imported manuscripts are
-  labelled `imported` (§16 decision 4) and the plumbing for the label exists.
+- **Signing keys are solid.** They persist per repository, survive restarts,
+  are wrapped with AES-256-GCM, and gitd refuses to start in production without
+  `SIGNING_MASTER_KEY` rather than leave them in plaintext or regenerate a key
+  and orphan an existing receipt chain.
+- **Offline verification has one real limit.** A clone verifies that its
+  receipt chain is internally consistent and signed by a key it carries — not
+  that the key is the *authoritative* one. Anchoring that needs the publisher
+  verification registry (Phase 7). Until then, treat a green verification as
+  strong evidence, never as proof that a human wrote the text. This is spelled
+  out in [`SECURITY.md`](./SECURITY.md).
